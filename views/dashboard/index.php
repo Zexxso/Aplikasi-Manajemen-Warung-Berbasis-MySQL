@@ -30,6 +30,18 @@
             </div>
 
             <div class="flex items-center space-x-2">
+                <!-- Supplier List Shortcut -->
+                <a
+                    href="<?= url('/suppliers') ?>"
+                    title="Pemasok & Kulakan"
+                    aria-label="Pemasok & Kulakan"
+                    class="w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 border border-white/20 flex items-center justify-center transition text-white"
+                >
+                    <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+                    </svg>
+                </a>
+
                 <!-- Customer List Shortcut -->
                 <a
                     href="<?= url('/customers') ?>"

@@ -74,32 +74,52 @@ if (str_starts_with($cleanPhone, '0')) {
         <!-- 1. Rincian Barang -->
         <div class="bg-[#161B29] border border-[#232B3E] rounded-2xl p-4 shadow-sm">
             <h3 class="text-xs font-bold text-slate-400 uppercase tracking-wider mb-3">Rincian Barang</h3>
-            <div class="flex items-start justify-between">
-                <div class="flex items-center space-x-3 min-w-0 pr-3">
-                    <?php if (!empty($tx['product_image'])): ?>
-                        <img
-                            src="<?= url('/uploads/products/' . $tx['product_image']) ?>"
-                            alt="<?= htmlspecialchars($tx['product_name'] ?? 'Barang') ?>"
-                            class="w-12 h-12 rounded-xl object-cover border border-[#232B3E] flex-shrink-0 shadow-inner"
-                        >
-                    <?php else: ?>
-                        <div class="w-12 h-12 rounded-xl bg-[#0B0E17] border border-[#232B3E] text-[#6F7CF5] font-extrabold text-base flex items-center justify-center flex-shrink-0 shadow-inner">
-                            <?= strtoupper(substr($tx['product_name'] ?? 'B', 0, 1)) ?>
+            <?php if (!empty($tx['items'])): ?>
+                <div class="space-y-3">
+                    <?php foreach ($tx['items'] as $item): ?>
+                        <div class="flex items-center justify-between py-1 border-b border-[#232B3E]/60 last:border-b-0">
+                            <div>
+                                <h4 class="text-sm font-bold text-white"><?= htmlspecialchars($item['nama_produk'] ?? 'Barang') ?></h4>
+                                <p class="text-xs text-slate-400 mt-0.5">
+                                    <span class="text-indigo-300 font-semibold"><?= (int) $item['jumlah'] ?> <?= htmlspecialchars($item['satuan'] ?? 'pcs') ?></span>
+                                    <span> × </span>
+                                    <span><?= format_rupiah($item['harga_satuan']) ?></span>
+                                </p>
+                            </div>
+                            <div class="text-right">
+                                <p class="text-sm font-extrabold text-white tabular-nums"><?= format_rupiah($item['subtotal']) ?></p>
+                            </div>
                         </div>
-                    <?php endif; ?>
-                    <div class="min-w-0">
-                        <h4 class="text-base font-bold text-white truncate"><?= htmlspecialchars($tx['product_name'] ?? 'Barang') ?></h4>
-                        <p class="text-xs text-slate-400 mt-0.5">
-                            <span class="text-indigo-300 font-semibold"><?= (int) $tx['quantity'] ?> <?= htmlspecialchars($tx['unit'] ?? 'item') ?></span>
-                            <span> × </span>
-                            <span><?= format_rupiah($tx['unit_price']) ?></span>
-                        </p>
+                    <?php endforeach; ?>
+                </div>
+            <?php else: ?>
+                <div class="flex items-start justify-between">
+                    <div class="flex items-center space-x-3 min-w-0 pr-3">
+                        <?php if (!empty($tx['product_image'])): ?>
+                            <img
+                                src="<?= url('/uploads/products/' . $tx['product_image']) ?>"
+                                alt="<?= htmlspecialchars($tx['product_name'] ?? 'Barang') ?>"
+                                class="w-12 h-12 rounded-xl object-cover border border-[#232B3E] flex-shrink-0 shadow-inner"
+                            >
+                        <?php else: ?>
+                            <div class="w-12 h-12 rounded-xl bg-[#0B0E17] border border-[#232B3E] text-[#6F7CF5] font-extrabold text-base flex items-center justify-center flex-shrink-0 shadow-inner">
+                                <?= strtoupper(substr($tx['product_name'] ?? 'B', 0, 1)) ?>
+                            </div>
+                        <?php endif; ?>
+                        <div class="min-w-0">
+                            <h4 class="text-base font-bold text-white truncate"><?= htmlspecialchars($tx['product_name'] ?? 'Barang') ?></h4>
+                            <p class="text-xs text-slate-400 mt-0.5">
+                                <span class="text-indigo-300 font-semibold"><?= (int) $tx['quantity'] ?> <?= htmlspecialchars($tx['unit'] ?? 'item') ?></span>
+                                <span> × </span>
+                                <span><?= format_rupiah($tx['unit_price']) ?></span>
+                            </p>
+                        </div>
+                    </div>
+                    <div class="text-right flex-shrink-0">
+                        <p class="text-sm font-extrabold text-white tabular-nums"><?= format_rupiah($subtotal) ?></p>
                     </div>
                 </div>
-                <div class="text-right flex-shrink-0">
-                    <p class="text-sm font-extrabold text-white tabular-nums"><?= format_rupiah($subtotal) ?></p>
-                </div>
-            </div>
+            <?php endif; ?>
         </div>
 
         <!-- 2. Informasi Pembeli -->

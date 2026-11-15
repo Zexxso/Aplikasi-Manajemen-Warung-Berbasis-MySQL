@@ -10,10 +10,9 @@ class CustomerController
             redirect('/login');
         }
 
-        $ownerId = warung_owner_id();
         $search = trim($_GET['search'] ?? '');
 
-        // Base query for kasbon customers with debt statistics
+        // Base query for kasbon customers with debt statistics (Single-store: Warung Bu Sari)
         $sql = "
             SELECT 
                 c.id,
@@ -36,11 +35,10 @@ class CustomerController
                 MAX(sm.tanggal_mutasi) AS last_purchase_at
             FROM pelanggan c
             LEFT JOIN mutasi_stok sm ON sm.id_pelanggan = c.id AND sm.dihapus_pada IS NULL AND sm.alasan = 'sale'
-            WHERE c.id_pengguna = :id_pengguna 
-              AND c.dihapus_pada IS NULL
+            WHERE c.dihapus_pada IS NULL
         ";
 
-        $params = ['id_pengguna' => $ownerId];
+        $params = [];
 
         if ($search !== '') {
             $sql .= " AND (c.nama LIKE :search OR c.kode LIKE :search OR c.telepon LIKE :search)";
@@ -63,10 +61,9 @@ class CustomerController
                 COALESCE(SUM(sm.jumlah * sm.harga_satuan), 0) AS total_spent_all
             FROM pelanggan c
             LEFT JOIN mutasi_stok sm ON sm.id_pelanggan = c.id AND sm.dihapus_pada IS NULL AND sm.alasan = 'sale'
-            WHERE c.id_pengguna = :id_pengguna 
-              AND c.dihapus_pada IS NULL
+            WHERE c.dihapus_pada IS NULL
         ");
-        $summaryStmt->execute(['id_pengguna' => $ownerId]);
+        $summaryStmt->execute();
         $summary = $summaryStmt->fetch() ?: [
             'total_customers' => 0,
             'total_sales_count' => 0,
@@ -89,17 +86,15 @@ class CustomerController
             redirect('/login');
         }
 
-        $ownerId = warung_owner_id();
-
         // Fetch customer info
         $stmt = db()->prepare("
             SELECT *,
                    id AS id, kode AS code, nama AS name, telepon AS phone, alamat AS address, catatan AS note, dibuat_pada AS created_at
             FROM pelanggan 
-            WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL 
+            WHERE id = :id AND dihapus_pada IS NULL 
             LIMIT 1
         ");
-        $stmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+        $stmt->execute(['id' => $id]);
         $customer = $stmt->fetch();
 
         if (!$customer) {
@@ -139,11 +134,10 @@ class CustomerController
             LEFT JOIN produk p ON p.id = sm.id_produk
             LEFT JOIN catatan_kas ce ON ce.id_mutasi_stok = sm.id AND ce.dihapus_pada IS NULL
             WHERE sm.id_pelanggan = :id_pelanggan 
-              AND sm.id_pengguna = :id_pengguna 
               AND sm.dihapus_pada IS NULL
             ORDER BY (sm.status_pembayaran = 'debt') DESC, sm.tanggal_mutasi DESC, sm.id DESC
         ");
-        $trxStmt->execute(['id_pelanggan' => $id, 'id_pengguna' => $ownerId]);
+        $trxStmt->execute(['id_pelanggan' => $id]);
         $transactions = $trxStmt->fetchAll();
 
         // Calculate totals
@@ -188,7 +182,6 @@ class CustomerController
             back();
         }
 
-        $ownerId = warung_owner_id();
         $name = trim($_POST['nama'] ?? $_POST['name'] ?? '');
         $phone = trim($_POST['telepon'] ?? $_POST['phone'] ?? '');
         $address = trim($_POST['alamat'] ?? $_POST['address'] ?? '');
@@ -199,14 +192,13 @@ class CustomerController
             back();
         }
 
-        $code = generate_next_customer_code($ownerId);
+        $code = generate_next_customer_code();
 
         $stmt = db()->prepare("
-            INSERT INTO pelanggan (id_pengguna, kode, nama, telepon, alamat, catatan, dibuat_pada, diperbarui_pada)
-            VALUES (:id_pengguna, :kode, :nama, :telepon, :alamat, :catatan, NOW(), NOW())
+            INSERT INTO pelanggan (kode, nama, telepon, alamat, catatan, dibuat_pada, diperbarui_pada)
+            VALUES (:kode, :nama, :telepon, :alamat, :catatan, NOW(), NOW())
         ");
         $stmt->execute([
-            'id_pengguna' => $ownerId,
             'kode' => $code,
             'nama' => $name,
             'telepon' => $phone ?: null,
@@ -229,7 +221,6 @@ class CustomerController
             back();
         }
 
-        $ownerId = warung_owner_id();
         $name = trim($_POST['nama'] ?? $_POST['name'] ?? '');
         $phone = trim($_POST['telepon'] ?? $_POST['phone'] ?? '');
         $address = trim($_POST['alamat'] ?? $_POST['address'] ?? '');
@@ -243,7 +234,7 @@ class CustomerController
         $stmt = db()->prepare("
             UPDATE pelanggan 
             SET nama = :nama, telepon = :telepon, alamat = :alamat, catatan = :catatan, diperbarui_pada = NOW()
-            WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL
+            WHERE id = :id AND dihapus_pada IS NULL
         ");
         $stmt->execute([
             'nama' => $name,
@@ -251,7 +242,6 @@ class CustomerController
             'alamat' => $address ?: null,
             'catatan' => $note ?: null,
             'id' => $id,
-            'id_pengguna' => $ownerId,
         ]);
 
         set_flash('status', "Data pembeli {$name} berhasil diperbarui!");
@@ -269,14 +259,12 @@ class CustomerController
             back();
         }
 
-        $ownerId = warung_owner_id();
-
         $stmt = db()->prepare("
             UPDATE pelanggan 
             SET dihapus_pada = NOW(), diperbarui_pada = NOW() 
-            WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL
+            WHERE id = :id AND dihapus_pada IS NULL
         ");
-        $stmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+        $stmt->execute(['id' => $id]);
 
         set_flash('status', 'Data pembeli berhasil dihapus.');
         redirect('/customers');

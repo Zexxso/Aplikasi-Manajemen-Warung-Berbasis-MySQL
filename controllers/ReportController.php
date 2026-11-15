@@ -50,40 +50,37 @@ class ReportController
         $startStr = $startDate->format('Y-m-d H:i:s');
         $endStr = $endDate->format('Y-m-d H:i:s');
 
-        // 1. Total Income & Total Expense
+        // 1. Total Income & Total Expense (Single-store: Warung Bu Sari)
         $incStmt = db()->prepare("
             SELECT COALESCE(SUM(nominal), 0) 
             FROM catatan_kas 
-            WHERE id_pengguna = :id_pengguna 
-              AND jenis = 'income' 
+            WHERE jenis = 'income' 
               AND dihapus_pada IS NULL 
               AND tanggal_transaksi BETWEEN :start AND :end
         ");
-        $incStmt->execute(['id_pengguna' => $ownerId, 'start' => $startStr, 'end' => $endStr]);
+        $incStmt->execute(['start' => $startStr, 'end' => $endStr]);
         $totalIncome = (float) $incStmt->fetchColumn();
 
         $expStmt = db()->prepare("
             SELECT COALESCE(SUM(nominal), 0) 
             FROM catatan_kas 
-            WHERE id_pengguna = :id_pengguna 
-              AND jenis = 'expense' 
+            WHERE jenis = 'expense' 
               AND dihapus_pada IS NULL 
               AND tanggal_transaksi BETWEEN :start AND :end
         ");
-        $expStmt->execute(['id_pengguna' => $ownerId, 'start' => $startStr, 'end' => $endStr]);
+        $expStmt->execute(['start' => $startStr, 'end' => $endStr]);
         $totalExpense = (float) $expStmt->fetchColumn();
 
         // 2. HPP (Harga Pokok Penjualan)
         $hppStmt = db()->prepare("
             SELECT COALESCE(SUM(jumlah * harga_modal), 0)
             FROM mutasi_stok
-            WHERE id_pengguna = :id_pengguna
-              AND jenis = 'out'
+            WHERE jenis = 'out'
               AND alasan = 'sale'
               AND dihapus_pada IS NULL
               AND tanggal_mutasi BETWEEN :start AND :end
         ");
-        $hppStmt->execute(['id_pengguna' => $ownerId, 'start' => $startStr, 'end' => $endStr]);
+        $hppStmt->execute(['start' => $startStr, 'end' => $endStr]);
         $hpp = (float) $hppStmt->fetchColumn();
 
         // 3. Pengeluaran Operasional (Non-Kulakan Expenses)
@@ -91,14 +88,13 @@ class ReportController
             SELECT COALESCE(SUM(ce.nominal), 0)
             FROM catatan_kas ce
             LEFT JOIN kategori_kas cc ON cc.id = ce.id_kategori_kas
-            WHERE ce.id_pengguna = :id_pengguna
-              AND ce.jenis = 'expense'
+            WHERE ce.jenis = 'expense'
               AND ce.id_mutasi_stok IS NULL
               AND (cc.nama IS NULL OR cc.nama != 'Kulakan')
               AND ce.dihapus_pada IS NULL
               AND ce.tanggal_transaksi BETWEEN :start AND :end
         ");
-        $opStmt->execute(['id_pengguna' => $ownerId, 'start' => $startStr, 'end' => $endStr]);
+        $opStmt->execute(['start' => $startStr, 'end' => $endStr]);
         $operationalExpense = (float) $opStmt->fetchColumn();
 
         // 4. Laba Kotor & Laba Bersih
@@ -117,8 +113,7 @@ class ReportController
                 SUM(sm.jumlah * sm.harga_satuan) AS total_revenue
             FROM mutasi_stok sm
             JOIN produk p ON p.id = sm.id_produk
-            WHERE sm.id_pengguna = :id_pengguna
-              AND sm.jenis = 'out'
+            WHERE sm.jenis = 'out'
               AND sm.alasan = 'sale'
               AND sm.dihapus_pada IS NULL
               AND sm.tanggal_mutasi BETWEEN :start AND :end
@@ -126,7 +121,7 @@ class ReportController
             ORDER BY total_quantity DESC
             LIMIT 5
         ");
-        $topStmt->execute(['id_pengguna' => $ownerId, 'start' => $startStr, 'end' => $endStr]);
+        $topStmt->execute(['start' => $startStr, 'end' => $endStr]);
         $rawTop = $topStmt->fetchAll();
 
         $maxQty = 1;
@@ -156,7 +151,7 @@ class ReportController
         }
 
         // 6. Chart Bars Data
-        $chartData = $this->buildChartData($ownerId, $period, $now, $startDate, $endDate);
+        $chartData = $this->buildChartData($period, $now, $startDate, $endDate);
 
         $report = [
             'period' => $period,
@@ -178,7 +173,7 @@ class ReportController
         ]);
     }
 
-    private function buildChartData(int $ownerId, string $period, DateTime $now, DateTime $startDate, DateTime $endDate): array
+    private function buildChartData(string $period, DateTime $now, DateTime $startDate, DateTime $endDate): array
     {
         $bars = [];
 
@@ -195,11 +190,10 @@ class ReportController
                         COALESCE(SUM(CASE WHEN jenis = 'income' THEN nominal ELSE 0 END), 0) AS income,
                         COALESCE(SUM(CASE WHEN jenis = 'expense' THEN nominal ELSE 0 END), 0) AS expense
                     FROM catatan_kas
-                    WHERE id_pengguna = :id_pengguna 
-                      AND dihapus_pada IS NULL 
+                    WHERE dihapus_pada IS NULL 
                       AND tanggal_transaksi BETWEEN :start AND :end
                 ");
-                $stmt->execute(['id_pengguna' => $ownerId, 'start' => $dayStart, 'end' => $dayEnd]);
+                $stmt->execute(['start' => $dayStart, 'end' => $dayEnd]);
                 $vals = $stmt->fetch();
 
                 $dayIndex = (int) $currentDay->format('w');
@@ -238,11 +232,10 @@ class ReportController
                         COALESCE(SUM(CASE WHEN jenis = 'income' THEN nominal ELSE 0 END), 0) AS income,
                         COALESCE(SUM(CASE WHEN jenis = 'expense' THEN nominal ELSE 0 END), 0) AS expense
                     FROM catatan_kas
-                    WHERE id_pengguna = :id_pengguna 
-                      AND dihapus_pada IS NULL 
+                    WHERE dihapus_pada IS NULL 
                       AND tanggal_transaksi BETWEEN :start AND :end
                 ");
-                $stmt->execute(['id_pengguna' => $ownerId, 'start' => $bStart, 'end' => $bEnd]);
+                $stmt->execute(['start' => $bStart, 'end' => $bEnd]);
                 $vals = $stmt->fetch();
 
                 $isCurrent = ($currentHour >= $b['start'] && $currentHour < $b['end']);
@@ -275,11 +268,10 @@ class ReportController
                         COALESCE(SUM(CASE WHEN jenis = 'income' THEN nominal ELSE 0 END), 0) AS income,
                         COALESCE(SUM(CASE WHEN jenis = 'expense' THEN nominal ELSE 0 END), 0) AS expense
                     FROM catatan_kas
-                    WHERE id_pengguna = :id_pengguna 
-                      AND dihapus_pada IS NULL 
+                    WHERE dihapus_pada IS NULL 
                       AND tanggal_transaksi BETWEEN :start AND :end
                 ");
-                $stmt->execute(['id_pengguna' => $ownerId, 'start' => $wStartStr, 'end' => $wEndStr]);
+                $stmt->execute(['start' => $wStartStr, 'end' => $wEndStr]);
                 $vals = $stmt->fetch();
 
                 $isCurrent = ($now >= $wStart && $now <= $wEnd);

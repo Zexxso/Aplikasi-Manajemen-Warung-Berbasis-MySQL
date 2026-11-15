@@ -15,10 +15,13 @@ class TransactionController
             back();
         }
 
-        $ownerId = warung_owner_id();
+        $user = auth_user();
+        $userId = (int) $user['id'];
         $productId = (int) ($_POST['id_produk'] ?? $_POST['product_id'] ?? 0);
         $quantity = (int) ($_POST['jumlah'] ?? $_POST['quantity'] ?? 0);
         $buyPrice = (float) ($_POST['harga_beli'] ?? $_POST['buy_price'] ?? 0);
+        $supplierId = (int) ($_POST['id_pemasok'] ?? $_POST['supplier_id'] ?? 0);
+        $quickSupplierName = trim($_POST['quick_supplier_name'] ?? '');
         $note = trim($_POST['catatan'] ?? $_POST['note'] ?? '');
 
         if (!$productId || $quantity <= 0) {
@@ -36,17 +39,35 @@ class TransactionController
             $pdo->beginTransaction();
 
             // Lock product
-            $stmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL FOR UPDATE");
-            $stmt->execute(['id' => $productId, 'id_pengguna' => $ownerId]);
+            $stmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id AND dihapus_pada IS NULL FOR UPDATE");
+            $stmt->execute(['id' => $productId]);
             $product = $stmt->fetch();
 
             if (!$product) {
                 throw new Exception("Barang tidak ditemukan.");
             }
 
-            // 1. Update product stock and buy_price
-            $prodStock = (int) ($product['stok'] ?? $product['stock']);
-            $prodBuyPrice = (float) ($product['harga_beli'] ?? $product['buy_price']);
+            // 1. Resolve Supplier
+            if ($supplierId <= 0 && $quickSupplierName !== '') {
+                $chkSup = $pdo->prepare("SELECT id_pemasok FROM pemasok WHERE LOWER(nama_pemasok) = LOWER(?) AND dihapus_pada IS NULL LIMIT 1");
+                $chkSup->execute([$quickSupplierName]);
+                $supplierId = (int) $chkSup->fetchColumn();
+
+                if (!$supplierId) {
+                    $insSup = $pdo->prepare("INSERT INTO pemasok (nama_pemasok, dibuat_pada, diperbarui_pada) VALUES (?, NOW(), NOW())");
+                    $insSup->execute([$quickSupplierName]);
+                    $supplierId = (int) $pdo->lastInsertId();
+                }
+            }
+
+            if ($supplierId <= 0) {
+                $defSup = $pdo->query("SELECT id_pemasok FROM pemasok WHERE dihapus_pada IS NULL ORDER BY id_pemasok ASC LIMIT 1")->fetchColumn();
+                $supplierId = (int) ($defSup ?: 1);
+            }
+
+            // 2. Update product stock and buy_price
+            $prodStock = (int) ($product['stok'] ?? $product['stock'] ?? 0);
+            $prodBuyPrice = (float) ($product['harga_beli'] ?? $product['buy_price'] ?? 0);
             $prodName = $product['nama'] ?? $product['name'] ?? 'Barang';
             $prodUnit = $product['satuan'] ?? $product['unit'] ?? 'item';
 
@@ -60,16 +81,17 @@ class TransactionController
                 'id' => $productId,
             ]);
 
-            // 2. Record stock movement
+            // 3. Record stock movement
             $noteText = $note ?: "Kulakan {$prodName}";
             $movementDate = date('Y-m-d H:i:s');
+            $totalAmount = $quantity * $buyPrice;
 
             $movStmt = $pdo->prepare("
                 INSERT INTO mutasi_stok (id_pengguna, id_produk, jenis, alasan, jumlah, harga_satuan, harga_modal, tanggal_mutasi, catatan, dibuat_pada, diperbarui_pada)
                 VALUES (:id_pengguna, :id_produk, 'in', 'purchase', :quantity, :unit_price, :unit_cost, :movement_date, :note, NOW(), NOW())
             ");
             $movStmt->execute([
-                'id_pengguna' => $ownerId,
+                'id_pengguna' => $userId,
                 'id_produk' => $productId,
                 'quantity' => $quantity,
                 'unit_price' => $buyPrice,
@@ -79,25 +101,37 @@ class TransactionController
             ]);
             $movementId = (int) $pdo->lastInsertId();
 
-            // 3. Auto record expense in cash_entries / catatan_kas
-            $catStmt = $pdo->prepare("SELECT id FROM kategori_kas WHERE jenis = 'expense' AND nama = 'Kulakan' AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-            $catStmt->execute(['id_pengguna' => $ownerId]);
+            // 4. Record into suplai table
+            $supStmt = $pdo->prepare("
+                INSERT INTO suplai (id_pemasok, id_produk, id_pengguna, id_mutasi_stok, tanggal_suplai, jumlah, harga_beli, total_harga, catatan, dibuat_pada, diperbarui_pada)
+                VALUES (:id_pemasok, :id_produk, :id_pengguna, :id_mutasi_stok, :tanggal, :jumlah, :harga, :total, :catatan, NOW(), NOW())
+            ");
+            $supStmt->execute([
+                'id_pemasok' => $supplierId,
+                'id_produk' => $productId,
+                'id_pengguna' => $userId,
+                'id_mutasi_stok' => $movementId,
+                'tanggal' => $movementDate,
+                'jumlah' => $quantity,
+                'harga' => $buyPrice,
+                'total' => $totalAmount,
+                'catatan' => $noteText,
+            ]);
+
+            // 5. Auto record expense in catatan_kas
+            $catStmt = $pdo->query("SELECT id FROM kategori_kas WHERE jenis = 'expense' AND nama = 'Kulakan' LIMIT 1");
             $categoryId = $catStmt->fetchColumn();
 
             if (!$categoryId) {
-                $fallbackStmt = $pdo->prepare("SELECT id FROM kategori_kas WHERE jenis = 'expense' AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-                $fallbackStmt->execute(['id_pengguna' => $ownerId]);
-                $categoryId = $fallbackStmt->fetchColumn();
+                $categoryId = $pdo->query("SELECT id FROM kategori_kas WHERE jenis = 'expense' LIMIT 1")->fetchColumn();
             }
-
-            $totalAmount = $quantity * $buyPrice;
 
             $cashStmt = $pdo->prepare("
                 INSERT INTO catatan_kas (id_pengguna, id_kategori_kas, id_mutasi_stok, jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada)
                 VALUES (:id_pengguna, :id_kategori_kas, :id_mutasi_stok, 'expense', :amount, :entry_date, :note, NOW(), NOW())
             ");
             $cashStmt->execute([
-                'id_pengguna' => $ownerId,
+                'id_pengguna' => $userId,
                 'id_kategori_kas' => $categoryId,
                 'id_mutasi_stok' => $movementId,
                 'amount' => $totalAmount,
@@ -129,9 +163,8 @@ class TransactionController
             back();
         }
 
-        $ownerId = warung_owner_id();
-        $productId = (int) ($_POST['id_produk'] ?? $_POST['product_id'] ?? 0);
-        $quantity = (int) ($_POST['jumlah'] ?? $_POST['quantity'] ?? 0);
+        $user = auth_user();
+        $userId = (int) $user['id'];
         $reason = $_POST['alasan'] ?? $_POST['reason'] ?? 'sale';
         $note = trim($_POST['catatan'] ?? $_POST['note'] ?? '');
 
@@ -139,154 +172,298 @@ class TransactionController
             $reason = 'sale';
         }
 
-        if (!$productId || $quantity <= 0) {
-            set_flash('error', 'Pilih barang dan masukkan jumlah keluar yang valid.');
-            back();
-        }
-
         $pdo = db();
         try {
             $pdo->beginTransaction();
 
-            // Lock product
-            $stmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL FOR UPDATE");
-            $stmt->execute(['id' => $productId, 'id_pengguna' => $ownerId]);
-            $product = $stmt->fetch();
-
-            if (!$product) {
-                throw new Exception("Barang tidak ditemukan.");
-            }
-
-            $prodStock = (int) ($product['stok'] ?? $product['stock']);
-            $prodName = $product['nama'] ?? $product['name'] ?? 'Barang';
-            $prodUnit = $product['satuan'] ?? $product['unit'] ?? 'item';
-
-            // CRITICAL BUSINESS RULE: Stock cannot be negative
-            if ($prodStock < $quantity) {
-                throw new Exception("Stok tidak mencukupi! Stok saat ini untuk {$prodName} hanya {$prodStock} {$prodUnit}.");
-            }
-
-            // 1. Deduct stock
-            $newStock = $prodStock - $quantity;
-            $upStmt = $pdo->prepare("UPDATE produk SET stok = :stock, diperbarui_pada = NOW() WHERE id = :id");
-            $upStmt->execute([
-                'stock' => $newStock,
-                'id' => $productId,
-            ]);
-
-            // 2. Resolve customer and payment status if reason is sale
-            $customerId = null;
-            $customerLabel = '';
-            $paymentStatus = 'paid';
-            $isKasbon = false;
-
-            if ($reason === 'sale') {
-                $paymentMethod = $_POST['payment_method'] ?? 'cash';
-                $isKasbon = ($paymentMethod === 'kasbon') || !empty($_POST['is_kasbon']);
-
-                if ($isKasbon) {
-                    $customerInput = trim($_POST['customer_name'] ?? '');
-                    if ($customerInput === '') {
-                        throw new Exception("Nama pembeli wajib diisi untuk transaksi kasbon / hutang.");
+            // Prepare items array (supporting Multi-Item cart or Single-item)
+            $items = [];
+            $rawCart = $_POST['cart_items'] ?? null;
+            if (!empty($rawCart)) {
+                $decoded = is_string($rawCart) ? json_decode($rawCart, true) : $rawCart;
+                if (is_array($decoded)) {
+                    foreach ($decoded as $ci) {
+                        $pId = (int) ($ci['id_produk'] ?? $ci['product_id'] ?? ($ci['product']['id'] ?? 0));
+                        $qty = (int) ($ci['jumlah'] ?? $ci['quantity'] ?? 0);
+                        if ($pId > 0 && $qty > 0) {
+                            $items[] = ['product_id' => $pId, 'quantity' => $qty];
+                        }
                     }
-                    $customerId = get_or_create_kasbon_customer($ownerId, $customerInput);
-                    $paymentStatus = 'debt';
-
-                    $custStmt = $pdo->prepare("SELECT kode, nama FROM pelanggan WHERE id = :id LIMIT 1");
-                    $custStmt->execute(['id' => $customerId]);
-                    $customerData = $custStmt->fetch();
-                    $customerName = $customerData['nama'] ?? $customerData['name'] ?? $customerInput;
-                    $customerLabel = " (Kasbon: {$customerName})";
-                } else {
-                    // Penjualan Tunai (Pembeli Umum / Anonim)
-                    $customerId = null;
-                    $paymentStatus = 'paid';
-                    $customerLabel = " (Tunai)";
                 }
             }
 
-            // 3. Insert stock movement
-            $defaultNote = match ($reason) {
-                'sale' => $isKasbon ? "Penjualan Kasbon {$prodName}" : "Penjualan {$prodName}",
-                'personal' => "Pemakaian pribadi {$prodName}",
-                'damaged' => "Barang rusak/hilang {$prodName}",
-                default => "Penyesuaian stok {$prodName}",
-            };
-            $noteText = $note ?: $defaultNote;
-            $movementDate = date('Y-m-d H:i:s');
-            $unitPrice = (float) ($product['harga_jual'] ?? $product['sell_price']);
-            $unitCost = (float) ($product['harga_beli'] ?? $product['buy_price']);
+            // Fallback to single item if cart is empty
+            if (empty($items)) {
+                $productId = (int) ($_POST['id_produk'] ?? $_POST['product_id'] ?? 0);
+                $quantity = (int) ($_POST['jumlah'] ?? $_POST['quantity'] ?? 0);
+                if ($productId > 0 && $quantity > 0) {
+                    $items[] = ['product_id' => $productId, 'quantity' => $quantity];
+                }
+            }
 
-            $movStmt = $pdo->prepare("
-                INSERT INTO mutasi_stok (id_pengguna, id_pelanggan, no_faktur, id_produk, jenis, alasan, status_pembayaran, jumlah, harga_satuan, harga_modal, tanggal_mutasi, catatan, dibuat_pada, diperbarui_pada)
-                VALUES (:id_pengguna, :id_pelanggan, 'TMP', :id_produk, 'out', :reason, :payment_status, :quantity, :unit_price, :unit_cost, :movement_date, :note, NOW(), NOW())
-            ");
-            $movStmt->execute([
-                'id_pengguna' => $ownerId,
-                'id_pelanggan' => $customerId,
-                'id_produk' => $productId,
-                'reason' => $reason,
-                'payment_status' => $paymentStatus,
-                'quantity' => $quantity,
-                'unit_price' => $unitPrice,
-                'unit_cost' => $unitCost,
-                'movement_date' => $movementDate,
-                'note' => $noteText,
-            ]);
-            $movementId = (int) $pdo->lastInsertId();
+            if (empty($items)) {
+                throw new Exception("Pilih setidaknya satu barang dan masukkan kuantitas yang valid.");
+            }
 
-            // Generate clean readable invoice_no
-            $invoiceNo = generate_invoice_no($movementId, $movementDate);
-            $pdo->prepare("UPDATE mutasi_stok SET no_faktur = :inv WHERE id = :id")->execute([
-                'inv' => $invoiceNo,
-                'id' => $movementId,
-            ]);
+            // If reason is not sale, only single item is processed
+            if ($reason !== 'sale') {
+                $item = $items[0];
+                $productId = $item['product_id'];
+                $quantity = $item['quantity'];
 
-            // 4. If reason is sale AND payment is paid (TUNAI), record income in catatan_kas
-            // (If KASBON, cash has not been received, so it is NOT recorded in catatan_kas yet!)
-            if ($reason === 'sale' && $paymentStatus === 'paid') {
-                $catStmt = $pdo->prepare("SELECT id FROM kategori_kas WHERE jenis = 'income' AND nama = 'Penjualan' AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-                $catStmt->execute(['id_pengguna' => $ownerId]);
-                $categoryId = $catStmt->fetchColumn();
+                $stmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id AND dihapus_pada IS NULL FOR UPDATE");
+                $stmt->execute(['id' => $productId]);
+                $product = $stmt->fetch();
+                if (!$product) throw new Exception("Barang tidak ditemukan.");
 
-                if (!$categoryId) {
-                    $fallbackStmt = $pdo->prepare("SELECT id FROM kategori_kas WHERE jenis = 'income' AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-                    $fallbackStmt->execute(['id_pengguna' => $ownerId]);
-                    $categoryId = $fallbackStmt->fetchColumn();
+                $prodStock = (int) ($product['stok'] ?? 0);
+                $prodName = $product['nama'] ?? 'Barang';
+                $prodUnit = $product['satuan'] ?? 'item';
+
+                if ($prodStock < $quantity) {
+                    throw new Exception("Stok {$prodName} tidak mencukupi! Sisa stok: {$prodStock} {$prodUnit}.");
                 }
 
-                $totalIncome = $quantity * $unitPrice;
+                $pdo->prepare("UPDATE produk SET stok = stok - :qty, diperbarui_pada = NOW() WHERE id = :id")
+                    ->execute(['qty' => $quantity, 'id' => $productId]);
+
+                $movementDate = date('Y-m-d H:i:s');
+                $defaultNote = match ($reason) {
+                    'personal' => "Pemakaian pribadi {$prodName}",
+                    'damaged' => "Barang rusak/hilang {$prodName}",
+                    default => "Penyesuaian stok {$prodName}",
+                };
+                $noteText = $note ?: $defaultNote;
+
+                $movStmt = $pdo->prepare("
+                    INSERT INTO mutasi_stok (id_pengguna, no_faktur, id_produk, jenis, alasan, status_pembayaran, jumlah, harga_satuan, harga_modal, tanggal_mutasi, catatan, dibuat_pada, diperbarui_pada)
+                    VALUES (:uid, 'TMP', :pid, 'out', :reason, 'paid', :qty, :price, :cost, :dt, :note, NOW(), NOW())
+                ");
+                $movStmt->execute([
+                    'uid' => $userId,
+                    'pid' => $productId,
+                    'reason' => $reason,
+                    'qty' => $quantity,
+                    'price' => (float)$product['harga_jual'],
+                    'cost' => (float)$product['harga_beli'],
+                    'dt' => $movementDate,
+                    'note' => $noteText,
+                ]);
+                $movId = (int)$pdo->lastInsertId();
+                $invoiceNo = generate_invoice_no($movId, $movementDate);
+                $pdo->prepare("UPDATE mutasi_stok SET no_faktur = ? WHERE id = ?")->execute([$invoiceNo, $movId]);
+
+                $pdo->commit();
+                set_flash('status', "Barang keluar ({$prodName} - {$quantity} {$prodUnit}) berhasil dicatat!");
+                back();
+                return;
+            }
+
+            // === REASON IS SALE ===
+            // Resolve payment method & customer
+            $paymentMethod = $_POST['payment_method'] ?? 'cash';
+            $isKasbon = ($paymentMethod === 'kasbon') || !empty($_POST['is_kasbon']);
+            $customerId = null;
+            $customerName = '';
+            $paymentStatus = 'paid';
+
+            if ($isKasbon) {
+                $customerInput = trim($_POST['customer_name'] ?? '');
+                if ($customerInput === '') {
+                    throw new Exception("Nama pembeli wajib diisi untuk transaksi kasbon / hutang.");
+                }
+                $customerId = get_or_create_kasbon_customer(null, $customerInput);
+                $paymentStatus = 'debt';
+
+                $custStmt = $pdo->prepare("SELECT nama FROM pelanggan WHERE id = :id LIMIT 1");
+                $custStmt->execute(['id' => $customerId]);
+                $customerName = $custStmt->fetchColumn() ?: $customerInput;
+            }
+
+            // Lock and validate all items
+            $validatedItems = [];
+            $totalHarga = 0.00;
+
+            foreach ($items as $item) {
+                $pId = $item['product_id'];
+                $qty = $item['quantity'];
+
+                $stmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id AND dihapus_pada IS NULL FOR UPDATE");
+                $stmt->execute(['id' => $pId]);
+                $prod = $stmt->fetch();
+                if (!$prod) throw new Exception("Barang ID #{$pId} tidak ditemukan.");
+
+                $stock = (int)$prod['stok'];
+                $pName = $prod['nama'];
+                $pUnit = $prod['satuan'] ?: 'item';
+
+                if ($stock < $qty) {
+                    throw new Exception("Stok untuk '{$pName}' tidak mencukupi! Stok saat ini: {$stock} {$pUnit}, jumlah diminta: {$qty} {$pUnit}.");
+                }
+
+                $sellPrice = (float)$prod['harga_jual'];
+                $buyPrice = (float)$prod['harga_beli'];
+                $subtotal = $qty * $sellPrice;
+                $totalHarga += $subtotal;
+
+                $validatedItems[] = [
+                    'product' => $prod,
+                    'quantity' => $qty,
+                    'sell_price' => $sellPrice,
+                    'buy_price' => $buyPrice,
+                    'subtotal' => $subtotal,
+                ];
+            }
+
+            // Payment calculations
+            $movementDate = date('Y-m-d H:i:s');
+            $rawCash = trim((string)($_POST['cash_received'] ?? $_POST['jumlah_bayar'] ?? ''));
+            $cleanCash = (float) preg_replace('/[^\d.]/', '', $rawCash);
+
+            if ($isKasbon) {
+                $jumlahBayar = 0.00;
+                $kembalian = 0.00;
+            } else {
+                $jumlahBayar = ($cleanCash >= $totalHarga) ? $cleanCash : $totalHarga;
+                $kembalian = max(0.00, $jumlahBayar - $totalHarga);
+            }
+
+            // Generate clean invoice number
+            $invPrefix = 'TRX-' . date('ymd', strtotime($movementDate)) . '-';
+            $randSuffix = str_pad((string)random_int(1000, 9999), 4, '0', STR_PAD_LEFT);
+            $invoiceNo = $invPrefix . $randSuffix;
+            while ($pdo->query("SELECT id_pesanan FROM pesanan WHERE no_faktur = '{$invoiceNo}' LIMIT 1")->fetch()) {
+                $randSuffix = str_pad((string)random_int(1000, 9999), 4, '0', STR_PAD_LEFT);
+                $invoiceNo = $invPrefix . $randSuffix;
+            }
+
+            // 1. Insert header pesanan
+            $insPesanan = $pdo->prepare("
+                INSERT INTO pesanan (
+                    no_faktur, id_pelanggan, id_pengguna, tanggal_pesanan,
+                    total_harga, jumlah_bayar, kembalian, metode_pembayaran,
+                    status_pembayaran, catatan, dibuat_pada, diperbarui_pada
+                ) VALUES (
+                    :faktur, :pelanggan, :pengguna, :tanggal,
+                    :total, :bayar, :kembalian, :metode,
+                    :status, :catatan, NOW(), NOW()
+                )
+            ");
+            $insPesanan->execute([
+                'faktur' => $invoiceNo,
+                'pelanggan' => $customerId,
+                'pengguna' => $userId,
+                'tanggal' => $movementDate,
+                'total' => $totalHarga,
+                'bayar' => $jumlahBayar,
+                'kembalian' => $kembalian,
+                'metode' => $isKasbon ? 'kasbon' : 'cash',
+                'status' => $paymentStatus,
+                'catatan' => $note ?: null,
+            ]);
+            $pesananId = (int)$pdo->lastInsertId();
+
+            // 2. Insert detail_pesanan & mutasi_stok, deduct stock
+            $firstMovementId = null;
+            foreach ($validatedItems as $vi) {
+                $p = $vi['product'];
+                $qty = $vi['quantity'];
+                $sub = $vi['subtotal'];
+                $pName = $p['nama'];
+
+                // Deduct stock
+                $pdo->prepare("UPDATE produk SET stok = stok - :qty, diperbarui_pada = NOW() WHERE id = :id")
+                    ->execute(['qty' => $qty, 'id' => $p['id']]);
+
+                // Insert detail_pesanan
+                $insDetail = $pdo->prepare("
+                    INSERT INTO detail_pesanan (
+                        id_pesanan, id_produk, jumlah, harga_satuan,
+                        harga_modal, subtotal, dibuat_pada, diperbarui_pada
+                    ) VALUES (
+                        :pesanan, :produk, :jumlah, :harga,
+                        :modal, :subtotal, NOW(), NOW()
+                    )
+                ");
+                $insDetail->execute([
+                    'pesanan' => $pesananId,
+                    'produk' => $p['id'],
+                    'jumlah' => $qty,
+                    'harga' => $vi['sell_price'],
+                    'modal' => $vi['buy_price'],
+                    'subtotal' => $sub,
+                ]);
+
+                // Insert mutasi_stok
+                $movNote = $isKasbon ? "Penjualan Kasbon {$pName}" : "Penjualan {$pName}";
+                $movStmt = $pdo->prepare("
+                    INSERT INTO mutasi_stok (
+                        id_pengguna, id_pelanggan, id_pesanan, no_faktur, id_produk,
+                        jenis, alasan, status_pembayaran, jumlah, harga_satuan,
+                        harga_modal, tanggal_mutasi, catatan, dibuat_pada, diperbarui_pada
+                    ) VALUES (
+                        :uid, :cid, :pid, :faktur, :prod_id,
+                        'out', 'sale', :status, :qty, :price,
+                        :modal, :tgl, :note, NOW(), NOW()
+                    )
+                ");
+                $movStmt->execute([
+                    'uid' => $userId,
+                    'cid' => $customerId,
+                    'pid' => $pesananId,
+                    'faktur' => $invoiceNo,
+                    'prod_id' => $p['id'],
+                    'status' => $paymentStatus,
+                    'qty' => $qty,
+                    'price' => $vi['sell_price'],
+                    'modal' => $vi['buy_price'],
+                    'tgl' => $movementDate,
+                    'note' => $movNote,
+                ]);
+                if ($firstMovementId === null) {
+                    $firstMovementId = (int)$pdo->lastInsertId();
+                }
+            }
+
+            // 3. If paid (cash), record in catatan_kas
+            if ($paymentStatus === 'paid') {
+                $catStmt = $pdo->query("SELECT id FROM kategori_kas WHERE jenis = 'income' AND nama = 'Penjualan' LIMIT 1");
+                $categoryId = $catStmt->fetchColumn();
+                if (!$categoryId) {
+                    $categoryId = $pdo->query("SELECT id FROM kategori_kas WHERE jenis = 'income' LIMIT 1")->fetchColumn();
+                }
+
+                $itemSummary = count($validatedItems) === 1 ? $validatedItems[0]['product']['nama'] : (count($validatedItems) . " macam barang");
+                $cashNote = "Penjualan {$invoiceNo} ({$itemSummary})";
 
                 $cashStmt = $pdo->prepare("
-                    INSERT INTO catatan_kas (id_pengguna, id_pelanggan, id_kategori_kas, id_mutasi_stok, jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada)
-                    VALUES (:id_pengguna, :id_pelanggan, :id_kategori_kas, :id_mutasi_stok, 'income', :amount, :entry_date, :note, NOW(), NOW())
+                    INSERT INTO catatan_kas (
+                        id_pengguna, id_pelanggan, id_kategori_kas, id_pesanan, id_mutasi_stok,
+                        jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada
+                    ) VALUES (
+                        :uid, :cid, :cat_id, :pesanan, :mutasi,
+                        'income', :amount, :tgl, :note, NOW(), NOW()
+                    )
                 ");
                 $cashStmt->execute([
-                    'id_pengguna' => $ownerId,
-                    'id_pelanggan' => $customerId,
-                    'id_kategori_kas' => $categoryId,
-                    'id_mutasi_stok' => $movementId,
-                    'amount' => $totalIncome,
-                    'entry_date' => $movementDate,
-                    'note' => $noteText,
+                    'uid' => $userId,
+                    'cid' => $customerId,
+                    'cat_id' => $categoryId,
+                    'pesanan' => $pesananId,
+                    'mutasi' => $firstMovementId,
+                    'amount' => $totalHarga,
+                    'tgl' => $movementDate,
+                    'note' => $cashNote,
                 ]);
             }
 
             $pdo->commit();
 
-            if ($reason === 'sale') {
-                if ($isKasbon) {
-                    set_flash('status', "Penjualan KASBON atas nama {$customerName} ({$invoiceNo}) berhasil dicatat di Buku Kasbon!");
-                } else {
-                    set_flash('status', "Penjualan Tunai ({$invoiceNo}) berhasil dicatat! Kas warung bertambah " . format_rupiah($quantity * $unitPrice) . ".");
-                }
+            if ($isKasbon) {
+                set_flash('status', "Penjualan KASBON atas nama {$customerName} ({$invoiceNo}) berhasil dicatat di Buku Kasbon!");
             } else {
-                $reasonText = match ($reason) {
-                    'personal' => 'Pemakaian pribadi',
-                    'damaged' => 'Barang rusak',
-                    default => 'Barang keluar',
-                };
-                set_flash('status', "{$reasonText} berhasil dicatat! Stok {$prodName} berkurang {$quantity} {$prodUnit}.");
+                $changeText = $kembalian > 0 ? " · Kembalian: " . format_rupiah($kembalian) : "";
+                set_flash('status', "Penjualan Tunai ({$invoiceNo}) berhasil dicatat! Total: " . format_rupiah($totalHarga) . $changeText . " · <a href='" . url('/receipt/' . $firstMovementId) . "' class='underline font-bold text-white'>Lihat Struk</a>");
             }
         } catch (Exception $e) {
             if ($pdo->inTransaction()) {
@@ -309,7 +486,7 @@ class TransactionController
             back();
         }
 
-        $ownerId = warung_owner_id();
+        $userId = (int) auth_user()['id'];
         $type = (($_POST['jenis'] ?? $_POST['type'] ?? '') === 'income') ? 'income' : 'expense';
         $categoryId = (int) ($_POST['id_kategori_kas'] ?? $_POST['cash_category_id'] ?? 0);
         $rawAmount = (string) ($_POST['nominal'] ?? $_POST['amount'] ?? '');
@@ -319,41 +496,47 @@ class TransactionController
         $note = trim($_POST['catatan'] ?? $_POST['note'] ?? '');
 
         if ($cleanAmount <= 0) {
-            set_flash('error', 'Nominal uang harus lebih dari 0.');
+            set_flash('error', 'Masukkan jumlah nominal uang yang valid.');
             back();
         }
 
         if (!$categoryId) {
-            set_flash('error', 'Pilih kategori kas terlebih dahulu.');
+            set_flash('error', 'Pilih kategori kas.');
             back();
         }
 
-        $catStmt = db()->prepare("SELECT nama FROM kategori_kas WHERE id = :id AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-        $catStmt->execute(['id' => $categoryId, 'id_pengguna' => $ownerId]);
-        $categoryName = $catStmt->fetchColumn();
+        $pdo = db();
+        try {
+            $catStmt = $pdo->prepare("SELECT id, nama FROM kategori_kas WHERE id = :id AND jenis = :type LIMIT 1");
+            $catStmt->execute(['id' => $categoryId, 'type' => $type]);
+            $category = $catStmt->fetch();
 
-        if (!$categoryName) {
-            set_flash('error', 'Kategori kas tidak valid.');
-            back();
+            if (!$category) {
+                throw new Exception("Kategori kas tidak valid.");
+            }
+
+            $catName = $category['nama'] ?? $category['name'] ?? 'Kas';
+            $defaultNote = ($type === 'income') ? "Pemasukan: {$catName}" : "Pengeluaran: {$catName}";
+            $noteText = $note ?: $defaultNote;
+
+            $cashStmt = $pdo->prepare("
+                INSERT INTO catatan_kas (id_pengguna, id_kategori_kas, jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada)
+                VALUES (:id_pengguna, :id_kategori_kas, :type, :amount, :entry_date, :note, NOW(), NOW())
+            ");
+            $cashStmt->execute([
+                'id_pengguna' => $userId,
+                'id_kategori_kas' => $categoryId,
+                'type' => $type,
+                'amount' => $cleanAmount,
+                'entry_date' => $entryDate,
+                'note' => $noteText,
+            ]);
+
+            $typeLabel = ($type === 'income') ? 'Pemasukan' : 'Pengeluaran';
+            set_flash('status', "{$typeLabel} kas sebesar " . format_rupiah($cleanAmount) . " berhasil dicatat!");
+        } catch (Exception $e) {
+            set_flash('error', $e->getMessage());
         }
-
-        $noteText = $note ?: $categoryName;
-
-        $insStmt = db()->prepare("
-            INSERT INTO catatan_kas (id_pengguna, id_kategori_kas, id_mutasi_stok, jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada)
-            VALUES (:id_pengguna, :id_kategori_kas, NULL, :type, :amount, :entry_date, :note, NOW(), NOW())
-        ");
-        $insStmt->execute([
-            'id_pengguna' => $ownerId,
-            'id_kategori_kas' => $categoryId,
-            'type' => $type,
-            'amount' => $cleanAmount,
-            'entry_date' => $entryDate,
-            'note' => $noteText,
-        ]);
-
-        $typeText = $type === 'income' ? 'Pemasukan kas' : 'Pengeluaran kas';
-        set_flash('status', "{$typeText} sebesar " . format_rupiah($cleanAmount) . " berhasil dicatat!");
 
         back();
     }
@@ -364,60 +547,63 @@ class TransactionController
             json_response(['success' => false, 'message' => 'Unauthorized'], 401);
         }
 
-        $ownerId = warung_owner_id();
-
-        // Handle JSON or Form-encoded input
-        $input = json_decode(file_get_contents('php://input'), true);
-        if (!$input) {
-            $input = $_POST;
+        if (!csrf_verify()) {
+            json_response(['success' => false, 'message' => 'Token keamanan tidak valid.'], 400);
         }
 
-        $name = trim($input['name'] ?? $input['nama'] ?? '');
-        $categoryId = !empty($input['category_id'] ?? $input['id_kategori']) ? (int) ($input['category_id'] ?? $input['id_kategori']) : null;
-        $unit = trim($input['unit'] ?? $input['satuan'] ?? 'pcs');
-        $buyPrice = (float) ($input['buy_price'] ?? $input['harga_beli'] ?? 0);
-        $sellPrice = (float) ($input['sell_price'] ?? $input['harga_jual'] ?? 0);
-        $stock = (int) ($input['stock'] ?? $input['stok'] ?? 0);
-        $minStock = (int) ($input['min_stock'] ?? $input['stok_minimum'] ?? 5);
+        $userId = (int) auth_user()['id'];
+        $name = trim($_POST['nama'] ?? $_POST['name'] ?? '');
+        $categoryId = !empty($_POST['id_kategori'] ?? $_POST['category_id']) ? (int) ($_POST['id_kategori'] ?? $_POST['category_id']) : null;
+        $unit = trim($_POST['satuan'] ?? $_POST['unit'] ?? 'pcs') ?: 'pcs';
+        $buyPrice = (float) ($_POST['harga_beli'] ?? $_POST['buy_price'] ?? 0);
+        $sellPrice = (float) ($_POST['harga_jual'] ?? $_POST['sell_price'] ?? 0);
+        $stock = (int) ($_POST['stok'] ?? $_POST['stock'] ?? 0);
 
-        if (empty($name)) {
+        if ($name === '') {
             json_response(['success' => false, 'message' => 'Nama barang wajib diisi.'], 422);
         }
 
-        $insStmt = db()->prepare("
-            INSERT INTO produk (id_pengguna, id_kategori, nama, satuan, harga_beli, harga_jual, stok, stok_minimum, status_aktif, dibuat_pada, diperbarui_pada)
-            VALUES (:id_pengguna, :id_kategori, :name, :unit, :buy_price, :sell_price, :stock, :min_stock, 1, NOW(), NOW())
-        ");
-        $insStmt->execute([
-            'id_pengguna' => $ownerId,
-            'id_kategori' => $categoryId,
-            'name' => $name,
-            'unit' => $unit,
-            'buy_price' => $buyPrice,
-            'sell_price' => $sellPrice,
-            'stock' => $stock,
-            'min_stock' => $minStock,
-        ]);
-        $newId = (int) db()->lastInsertId();
+        if ($buyPrice < 0 || $sellPrice < 0 || $stock < 0) {
+            json_response(['success' => false, 'message' => 'Harga dan stok tidak boleh negatif.'], 422);
+        }
 
-        $productData = [
-            'id' => $newId,
-            'nama' => $name,
-            'name' => $name,
-            'satuan' => $unit,
-            'unit' => $unit,
-            'harga_beli' => $buyPrice,
-            'buy_price' => $buyPrice,
-            'harga_jual' => $sellPrice,
-            'sell_price' => $sellPrice,
-            'stok' => $stock,
-            'stock' => $stock,
-        ];
+        $pdo = db();
+        try {
+            $stmt = $pdo->prepare("
+                INSERT INTO produk (id_kategori, nama, satuan, harga_beli, harga_jual, stok, status_aktif, dibuat_pada, diperbarui_pada)
+                VALUES (:id_kategori, :name, :unit, :buy_price, :sell_price, :stock, 1, NOW(), NOW())
+            ");
+            $stmt->execute([
+                'id_kategori' => $categoryId,
+                'name' => $name,
+                'unit' => $unit,
+                'buy_price' => $buyPrice,
+                'sell_price' => $sellPrice,
+                'stock' => $stock,
+            ]);
 
-        json_response([
-            'success' => true,
-            'product' => $productData,
-        ]);
+            $id = (int) $pdo->lastInsertId();
+
+            json_response([
+                'success' => true,
+                'message' => "Barang {$name} berhasil ditambahkan!",
+                'product' => [
+                    'id' => $id,
+                    'name' => $name,
+                    'nama' => $name,
+                    'unit' => $unit,
+                    'satuan' => $unit,
+                    'buy_price' => $buyPrice,
+                    'harga_beli' => $buyPrice,
+                    'sell_price' => $sellPrice,
+                    'harga_jual' => $sellPrice,
+                    'stock' => $stock,
+                    'stok' => $stock,
+                ],
+            ]);
+        } catch (Exception $e) {
+            json_response(['success' => false, 'message' => $e->getMessage()], 500);
+        }
     }
 
     public function settleKasbon(int $movementId): void
@@ -431,7 +617,7 @@ class TransactionController
             back();
         }
 
-        $ownerId = warung_owner_id();
+        $userId = (int) auth_user()['id'];
         $pdo = db();
 
         try {
@@ -442,10 +628,10 @@ class TransactionController
                 FROM mutasi_stok sm
                 LEFT JOIN produk p ON p.id = sm.id_produk
                 LEFT JOIN pelanggan c ON c.id = sm.id_pelanggan
-                WHERE sm.id = :id AND sm.id_pengguna = :id_pengguna AND sm.status_pembayaran = 'debt' AND sm.dihapus_pada IS NULL
+                WHERE sm.id = :id AND sm.status_pembayaran = 'debt' AND sm.dihapus_pada IS NULL
                 FOR UPDATE
             ");
-            $stmt->execute(['id' => $movementId, 'id_pengguna' => $ownerId]);
+            $stmt->execute(['id' => $movementId]);
             $movement = $stmt->fetch();
 
             if (!$movement) {
@@ -456,33 +642,41 @@ class TransactionController
             $up = $pdo->prepare("UPDATE mutasi_stok SET status_pembayaran = 'paid', dibayar_pada = :paid_at, diperbarui_pada = NOW() WHERE id = :id");
             $up->execute(['paid_at' => $now, 'id' => $movementId]);
 
+            // If linked to pesanan header, update pesanan as well
+            if (!empty($movement['id_pesanan'])) {
+                $upPesanan = $pdo->prepare("
+                    UPDATE pesanan 
+                    SET status_pembayaran = 'paid', jumlah_bayar = total_harga, kembalian = 0.00, diperbarui_pada = NOW() 
+                    WHERE id_pesanan = :pid
+                ");
+                $upPesanan->execute(['pid' => $movement['id_pesanan']]);
+            }
+
             // Insert into catatan_kas
-            $catStmt = $pdo->prepare("SELECT id FROM kategori_kas WHERE jenis = 'income' AND nama = 'Penjualan' AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-            $catStmt->execute(['id_pengguna' => $ownerId]);
+            $catStmt = $pdo->query("SELECT id FROM kategori_kas WHERE jenis = 'income' AND nama = 'Penjualan' LIMIT 1");
             $categoryId = $catStmt->fetchColumn();
 
             if (!$categoryId) {
-                $fallbackStmt = $pdo->prepare("SELECT id FROM kategori_kas WHERE jenis = 'income' AND (id_pengguna = :id_pengguna OR id_pengguna IS NULL) LIMIT 1");
-                $fallbackStmt->execute(['id_pengguna' => $ownerId]);
-                $categoryId = $fallbackStmt->fetchColumn();
+                $categoryId = $pdo->query("SELECT id FROM kategori_kas WHERE jenis = 'income' LIMIT 1")->fetchColumn();
             }
 
-            $quantity = (int) ($movement['jumlah'] ?? $movement['quantity']);
-            $unitPrice = (float) ($movement['harga_satuan'] ?? $movement['unit_price']);
+            $quantity = (int) ($movement['jumlah'] ?? $movement['quantity'] ?? 1);
+            $unitPrice = (float) ($movement['harga_satuan'] ?? $movement['unit_price'] ?? 0);
             $totalAmount = $quantity * $unitPrice;
             $customerName = $movement['customer_name'] ?? $movement['nama_pelanggan'] ?? 'Pembeli';
-            $invoiceNo = $movement['no_faktur'] ?? $movement['invoice_no'] ?? ('TRX-' . $movementId);
+            $invoiceNo = $movement['no_faktur'] ?? ('TRX-' . $movementId);
             $productName = $movement['product_name'] ?? $movement['nama'] ?? 'Barang';
             $note = "Pelunasan Kasbon {$customerName} ({$invoiceNo}) - {$productName}";
 
             $cashStmt = $pdo->prepare("
-                INSERT INTO catatan_kas (id_pengguna, id_pelanggan, id_kategori_kas, id_mutasi_stok, jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada)
-                VALUES (:id_pengguna, :id_pelanggan, :id_kategori_kas, :id_mutasi_stok, 'income', :amount, :entry_date, :note, NOW(), NOW())
+                INSERT INTO catatan_kas (id_pengguna, id_pelanggan, id_kategori_kas, id_pesanan, id_mutasi_stok, jenis, nominal, tanggal_transaksi, catatan, dibuat_pada, diperbarui_pada)
+                VALUES (:id_pengguna, :id_pelanggan, :id_kategori_kas, :id_pesanan, :id_mutasi_stok, 'income', :amount, :entry_date, :note, NOW(), NOW())
             ");
             $cashStmt->execute([
-                'id_pengguna' => $ownerId,
-                'id_pelanggan' => $movement['id_pelanggan'] ?? $movement['customer_id'] ?? null,
+                'id_pengguna' => $userId,
+                'id_pelanggan' => $movement['id_pelanggan'] ?? null,
                 'id_kategori_kas' => $categoryId,
+                'id_pesanan' => $movement['id_pesanan'] ?? null,
                 'id_mutasi_stok' => $movementId,
                 'amount' => $totalAmount,
                 'entry_date' => $now,
@@ -507,14 +701,15 @@ class TransactionController
             redirect('/login');
         }
 
-        $ownerId = warung_owner_id();
         $owner = get_warung_owner();
         $user = auth_user();
+        $pdo = db();
 
-        $stmt = db()->prepare("
+        $stmt = $pdo->prepare("
             SELECT 
                 sm.id AS movement_id,
                 sm.id AS id_mutasi_stok,
+                sm.id_pesanan,
                 sm.no_faktur AS invoice_no,
                 sm.no_faktur,
                 sm.jenis AS movement_type,
@@ -565,17 +760,37 @@ class TransactionController
             FROM mutasi_stok sm
             LEFT JOIN produk p ON p.id = sm.id_produk
             LEFT JOIN pelanggan c ON c.id = sm.id_pelanggan
-            LEFT JOIN catatan_kas ce ON ce.id_mutasi_stok = sm.id AND ce.dihapus_pada IS NULL
+            LEFT JOIN catatan_kas ce ON (ce.id_mutasi_stok = sm.id OR (sm.id_pesanan IS NOT NULL AND ce.id_pesanan = sm.id_pesanan)) AND ce.dihapus_pada IS NULL
             LEFT JOIN pengguna u ON u.id = sm.id_pengguna
-            WHERE sm.id = :id AND sm.id_pengguna = :id_pengguna AND sm.dihapus_pada IS NULL
+            WHERE sm.id = :id AND sm.dihapus_pada IS NULL
             LIMIT 1
         ");
-        $stmt->execute(['id' => $movementId, 'id_pengguna' => $ownerId]);
+        $stmt->execute(['id' => $movementId]);
         $tx = $stmt->fetch();
 
         if (!$tx) {
             set_flash('error', 'Data detail transaksi tidak ditemukan.');
             redirect('/history');
+        }
+
+        // Check if multi-item order
+        if (!empty($tx['id_pesanan'])) {
+            $itemsStmt = $pdo->prepare("
+                SELECT dp.*, p.nama AS nama_produk, p.satuan, p.gambar AS product_image
+                FROM detail_pesanan dp
+                JOIN produk p ON p.id = dp.id_produk
+                WHERE dp.id_pesanan = :id AND dp.dihapus_pada IS NULL
+            ");
+            $itemsStmt->execute(['id' => $tx['id_pesanan']]);
+            $items = $itemsStmt->fetchAll();
+            if (count($items) > 1) {
+                $tx['items'] = $items;
+                // Calculate grand total from pesanan
+                $pesanan = $pdo->query("SELECT total_harga, jumlah_bayar, kembalian FROM pesanan WHERE id_pesanan = " . (int)$tx['id_pesanan'])->fetch();
+                if ($pesanan) {
+                    $tx['subtotal'] = (float)$pesanan['total_harga'];
+                }
+            }
         }
 
         view('transactions.show', [
@@ -592,65 +807,117 @@ class TransactionController
             redirect('/login');
         }
 
-        $ownerId = warung_owner_id();
         $owner = get_warung_owner();
         $user = auth_user();
+        $pdo = db();
 
-        $stmt = db()->prepare("
-            SELECT 
-                sm.id AS movement_id,
-                sm.id AS id_mutasi_stok,
-                sm.no_faktur AS invoice_no,
-                sm.no_faktur,
-                sm.jenis AS type,
-                sm.jenis,
-                sm.alasan AS reason,
-                sm.alasan,
-                sm.status_pembayaran AS payment_status,
-                sm.status_pembayaran,
-                sm.jumlah AS quantity,
-                sm.jumlah,
-                sm.harga_satuan AS unit_price,
-                sm.harga_satuan,
-                (sm.jumlah * sm.harga_satuan) AS subtotal,
-                sm.tanggal_mutasi AS movement_date,
-                sm.tanggal_mutasi,
-                sm.dibayar_pada AS paid_at,
-                sm.dibayar_pada,
-                sm.catatan AS note,
-                sm.catatan,
-                p.nama AS product_name,
-                p.nama,
-                p.satuan AS unit,
-                p.satuan,
-                c.id AS customer_id,
-                c.id AS id_pelanggan,
-                c.kode AS customer_code,
-                c.kode,
-                c.nama AS customer_name,
-                c.nama,
-                c.telepon AS customer_phone,
-                c.telepon
-            FROM mutasi_stok sm
-            LEFT JOIN produk p ON p.id = sm.id_produk
-            LEFT JOIN pelanggan c ON c.id = sm.id_pelanggan
-            WHERE sm.id = :id AND sm.id_pengguna = :id_pengguna AND sm.dihapus_pada IS NULL
-            LIMIT 1
-        ");
-        $stmt->execute(['id' => $movementId, 'id_pengguna' => $ownerId]);
-        $receipt = $stmt->fetch();
+        // Check mutasi_stok
+        $stmt = $pdo->prepare("SELECT * FROM mutasi_stok WHERE id = :id AND dihapus_pada IS NULL LIMIT 1");
+        $stmt->execute(['id' => $movementId]);
+        $mov = $stmt->fetch();
 
-        if (!$receipt) {
-            set_flash('error', 'Data struk tidak ditemukan.');
-            redirect('/history');
+        $pesananId = $mov['id_pesanan'] ?? null;
+        if (!$pesananId && !$mov) {
+            $chkPesanan = $pdo->prepare("SELECT id_pesanan FROM pesanan WHERE id_pesanan = ? LIMIT 1");
+            $chkPesanan->execute([$movementId]);
+            $pesananId = $chkPesanan->fetchColumn();
         }
 
-        view('receipt.show', [
-            'receipt' => $receipt,
-            'owner' => $owner,
-            'user' => $user,
-            'title' => 'Struk Penjualan #' . ($receipt['invoice_no'] ?: $receipt['movement_id']),
-        ], 'guest');
+        if ($pesananId) {
+            $orderStmt = $pdo->prepare("
+                SELECT 
+                    o.id_pesanan,
+                    o.no_faktur AS invoice_no,
+                    o.tanggal_pesanan AS movement_date,
+                    o.total_harga,
+                    o.jumlah_bayar,
+                    o.kembalian,
+                    o.metode_pembayaran,
+                    o.status_pembayaran AS payment_status,
+                    o.catatan AS note,
+                    c.nama AS customer_name,
+                    c.telepon AS customer_phone,
+                    u.nama AS creator_name
+                FROM pesanan o
+                LEFT JOIN pelanggan c ON c.id = o.id_pelanggan
+                LEFT JOIN pengguna u ON u.id = o.id_pengguna
+                WHERE o.id_pesanan = :id
+                LIMIT 1
+            ");
+            $orderStmt->execute(['id' => $pesananId]);
+            $order = $orderStmt->fetch();
+
+            $itemsStmt = $pdo->prepare("
+                SELECT 
+                    dp.*,
+                    p.nama AS nama_produk,
+                    p.satuan
+                FROM detail_pesanan dp
+                JOIN produk p ON p.id = dp.id_produk
+                WHERE dp.id_pesanan = :id AND dp.dihapus_pada IS NULL
+            ");
+            $itemsStmt->execute(['id' => $pesananId]);
+            $items = $itemsStmt->fetchAll();
+
+            $receipt = [
+                'movement_id' => $movementId,
+                'id_pesanan' => $pesananId,
+                'invoice_no' => $order['invoice_no'],
+                'movement_date' => $order['movement_date'],
+                'payment_status' => $order['payment_status'],
+                'subtotal' => (float)$order['total_harga'],
+                'total_harga' => (float)$order['total_harga'],
+                'jumlah_bayar' => (float)$order['jumlah_bayar'],
+                'kembalian' => (float)$order['kembalian'],
+                'note' => $order['note'],
+                'customer_name' => $order['customer_name'],
+                'customer_phone' => $order['customer_phone'],
+                'items' => $items,
+            ];
+
+            view('receipt.show', [
+                'receipt' => $receipt,
+                'owner' => $owner,
+                'user' => $user,
+                'title' => 'Struk Penjualan #' . $order['invoice_no'],
+            ], 'guest');
+            return;
+        }
+
+        // Fallback for non-order movements (e.g. personal, damaged, adjustment)
+        if ($mov) {
+            $prodStmt = $pdo->prepare("SELECT nama, satuan FROM produk WHERE id = ?");
+            $prodStmt->execute([$mov['id_produk']]);
+            $prod = $prodStmt->fetch();
+
+            $receipt = [
+                'movement_id' => $mov['id'],
+                'invoice_no' => $mov['no_faktur'],
+                'movement_date' => $mov['tanggal_mutasi'] ?: $mov['dibuat_pada'],
+                'payment_status' => $mov['status_pembayaran'],
+                'quantity' => $mov['jumlah'],
+                'unit_price' => (float)$mov['harga_satuan'],
+                'subtotal' => (float)$mov['jumlah'] * (float)$mov['harga_satuan'],
+                'total_harga' => (float)$mov['jumlah'] * (float)$mov['harga_satuan'],
+                'jumlah_bayar' => (float)$mov['jumlah'] * (float)$mov['harga_satuan'],
+                'kembalian' => 0.00,
+                'product_name' => $prod['nama'] ?? 'Barang',
+                'unit' => $prod['satuan'] ?? 'item',
+                'note' => $mov['catatan'],
+                'customer_name' => null,
+                'items' => [],
+            ];
+
+            view('receipt.show', [
+                'receipt' => $receipt,
+                'owner' => $owner,
+                'user' => $user,
+                'title' => 'Bukti Pengeluaran Barang #' . $mov['no_faktur'],
+            ], 'guest');
+            return;
+        }
+
+        set_flash('error', 'Data struk tidak ditemukan.');
+        redirect('/history');
     }
 }
-

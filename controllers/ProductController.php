@@ -12,9 +12,9 @@ class ProductController
 
         $ownerId = warung_owner_id();
 
-        // Get categories
-        $catStmt = db()->prepare("SELECT id, nama, id_pengguna, nama AS name, id_pengguna AS user_id FROM kategori WHERE id_pengguna = :id_pengguna ORDER BY nama ASC");
-        $catStmt->execute(['id_pengguna' => $ownerId]);
+        // Get categories (Single-store: Warung Bu Sari)
+        $catStmt = db()->prepare("SELECT id, nama, nama AS name FROM kategori ORDER BY nama ASC");
+        $catStmt->execute();
         $categories = $catStmt->fetchAll();
 
         // Get products with category name
@@ -41,11 +41,10 @@ class ProductController
                 c.nama AS category_name
             FROM produk p
             LEFT JOIN kategori c ON c.id = p.id_kategori
-            WHERE p.id_pengguna = :id_pengguna 
-              AND p.dihapus_pada IS NULL
+            WHERE p.dihapus_pada IS NULL
             ORDER BY p.nama ASC
         ");
-        $prodStmt->execute(['id_pengguna' => $ownerId]);
+        $prodStmt->execute();
         $products = $prodStmt->fetchAll();
 
         $initialFilter = $_GET['filter'] ?? '';
@@ -102,10 +101,10 @@ class ProductController
             back();
         }
 
-        // Validate category ownership if selected
+        // Validate category if selected
         if ($categoryId) {
-            $catCheck = db()->prepare("SELECT id FROM kategori WHERE id = :id AND id_pengguna = :id_pengguna");
-            $catCheck->execute(['id' => $categoryId, 'id_pengguna' => $ownerId]);
+            $catCheck = db()->prepare("SELECT id FROM kategori WHERE id = :id");
+            $catCheck->execute(['id' => $categoryId]);
             if (!$catCheck->fetch()) {
                 $categoryId = null;
             }
@@ -121,11 +120,10 @@ class ProductController
 
         try {
             $insStmt = db()->prepare("
-                INSERT INTO produk (id_pengguna, id_kategori, nama, satuan, gambar, harga_beli, harga_jual, stok, stok_minimum, status_aktif, dibuat_pada, diperbarui_pada)
-                VALUES (:id_pengguna, :id_kategori, :nama, :satuan, :gambar, :harga_beli, :harga_jual, :stok, :stok_minimum, 1, NOW(), NOW())
+                INSERT INTO produk (id_kategori, nama, satuan, gambar, harga_beli, harga_jual, stok, stok_minimum, status_aktif, dibuat_pada, diperbarui_pada)
+                VALUES (:id_kategori, :nama, :satuan, :gambar, :harga_beli, :harga_jual, :stok, :stok_minimum, 1, NOW(), NOW())
             ");
             $insStmt->execute([
-                'id_pengguna' => $ownerId,
                 'id_kategori' => $categoryId,
                 'nama' => $name,
                 'satuan' => $unit,
@@ -159,9 +157,9 @@ class ProductController
 
         $ownerId = warung_owner_id();
 
-        // Check product ownership
-        $stmt = db()->prepare("SELECT * FROM produk WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL LIMIT 1");
-        $stmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+        // Check product existence
+        $stmt = db()->prepare("SELECT * FROM produk WHERE id = :id AND dihapus_pada IS NULL LIMIT 1");
+        $stmt->execute(['id' => $id]);
         $product = $stmt->fetch();
 
         if (!$product) {
@@ -191,8 +189,8 @@ class ProductController
         }
 
         if ($categoryId) {
-            $catCheck = db()->prepare("SELECT id FROM kategori WHERE id = :id AND id_pengguna = :id_pengguna");
-            $catCheck->execute(['id' => $categoryId, 'id_pengguna' => $ownerId]);
+            $catCheck = db()->prepare("SELECT id FROM kategori WHERE id = :id");
+            $catCheck->execute(['id' => $categoryId]);
             if (!$catCheck->fetch()) {
                 $categoryId = null;
             }
@@ -232,7 +230,7 @@ class ProductController
                     stok = :stok,
                     stok_minimum = :stok_minimum,
                     diperbarui_pada = NOW()
-                WHERE id = :id AND id_pengguna = :id_pengguna
+                WHERE id = :id AND dihapus_pada IS NULL
             ");
             $upStmt->execute([
                 'nama' => $name,
@@ -244,7 +242,6 @@ class ProductController
                 'stok' => $stock,
                 'stok_minimum' => $minStock,
                 'id' => $id,
-                'id_pengguna' => $ownerId,
             ]);
         } catch (PDOException $e) {
             set_old($_POST);
@@ -268,15 +265,13 @@ class ProductController
             back();
         }
 
-        $ownerId = warung_owner_id();
-
-        $stmt = db()->prepare("SELECT * FROM produk WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL LIMIT 1");
-        $stmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+        $stmt = db()->prepare("SELECT * FROM produk WHERE id = :id AND dihapus_pada IS NULL LIMIT 1");
+        $stmt->execute(['id' => $id]);
         $product = $stmt->fetch();
 
         if ($product) {
-            $delStmt = db()->prepare("UPDATE produk SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id = :id AND id_pengguna = :id_pengguna");
-            $delStmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+            $delStmt = db()->prepare("UPDATE produk SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id = :id");
+            $delStmt->execute(['id' => $id]);
             $prodName = $product['nama'] ?? $product['name'] ?? 'Barang';
             set_flash('status', "Barang {$prodName} berhasil dihapus.");
         } else {

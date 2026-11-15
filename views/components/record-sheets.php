@@ -61,6 +61,15 @@ $customersData = array_map(function ($c) {
         'phone' => (string) $phone,
     ];
 }, $globalCustomers ?? []);
+
+$suppliersData = array_map(function ($s) {
+    return [
+        'id_pemasok' => (int)$s['id_pemasok'],
+        'nama_pemasok' => (string)$s['nama_pemasok'],
+        'no_hp_pemasok' => (string)($s['no_hp_pemasok'] ?? ''),
+        'alamat_pemasok' => (string)($s['alamat_pemasok'] ?? ''),
+    ];
+}, $globalSuppliers ?? []);
 ?>
 
 <div
@@ -70,6 +79,7 @@ $customersData = array_map(function ($c) {
         stockOutOpen: false,
         cashOpen: false,
         quickProductOpen: false,
+        quickSupplierOpen: false,
         productPickerOpen: false,
         pickerMode: 'stockIn',
         pickerSearch: '',
@@ -78,11 +88,14 @@ $customersData = array_map(function ($c) {
         cashCategories: <?= htmlspecialchars(json_encode($cashCategoriesData, JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8') ?>,
         productCategories: <?= htmlspecialchars(json_encode($productCategoriesData, JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8') ?>,
         allCustomers: <?= htmlspecialchars(json_encode($customersData, JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8') ?>,
+        allSuppliers: <?= htmlspecialchars(json_encode($suppliersData, JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8') ?>,
 
         stockIn: {
             product: null,
             quantity: '',
             buy_price: '',
+            supplier_id: '',
+            quick_supplier_name: '',
             note: '',
             get total() {
                 const qty = parseInt(this.quantity) || 0;
@@ -94,19 +107,53 @@ $customersData = array_map(function ($c) {
         stockOut: {
             product: null,
             quantity: '',
+            cart: [],
             reason: 'sale',
             payment_method: 'cash',
             customer_name: '',
+            cash_received: '',
             note: '',
+            addToCart(p, q = 1) {
+                if (!p) return;
+                const qty = parseInt(q) || 1;
+                const existing = this.cart.find(item => item.id === p.id);
+                if (existing) {
+                    existing.quantity += qty;
+                } else {
+                    this.cart.push({
+                        id: p.id,
+                        name: p.name,
+                        unit: p.unit,
+                        sell_price: p.sell_price,
+                        stock: p.stock,
+                        quantity: qty
+                    });
+                }
+            },
+            removeFromCart(index) {
+                this.cart.splice(index, 1);
+            },
             get total() {
+                if (this.cart.length > 0) {
+                    return this.cart.reduce((sum, item) => sum + (item.quantity * parseFloat(item.sell_price)), 0);
+                }
                 const qty = parseInt(this.quantity) || 0;
                 const price = this.product ? parseFloat(this.product.sell_price) : 0;
                 return qty * price;
             },
             get isOverStock() {
+                if (this.cart.length > 0) {
+                    return this.cart.some(item => item.quantity > item.stock);
+                }
                 if (!this.product) return false;
                 const qty = parseInt(this.quantity) || 0;
                 return qty > this.product.stock;
+            },
+            get kembalian() {
+                const raw = this.cash_received.toString().replace(/\D/g, '');
+                const received = parseFloat(raw) || 0;
+                const tot = this.total;
+                return received >= tot ? (received - tot) : 0;
             }
         },
 
@@ -202,6 +249,10 @@ $customersData = array_map(function ($c) {
         },
         selectProductForStockOut(p) {
             this.stockOut.product = p;
+            if (this.pickerMode === 'addToCart') {
+                this.stockOut.addToCart(p, 1);
+                this.stockOutOpen = true;
+            }
             this.productPickerOpen = false;
         },
         get filteredPickerProducts() {
@@ -476,6 +527,32 @@ $customersData = array_map(function ($c) {
                     </div>
                 </div>
 
+                <!-- Pilihan Pemasok (Kulakan) -->
+                <div>
+                    <div class="flex items-center justify-between mb-1">
+                        <label class="block text-xs font-semibold text-slate-300">
+                            Pemasok / Suplier
+                        </label>
+                        <button
+                            type="button"
+                            @click="quickSupplierOpen = true"
+                            class="text-[11px] text-emerald-400 hover:text-emerald-300 font-bold flex items-center space-x-1"
+                        >
+                            <span>+ Pemasok Baru</span>
+                        </button>
+                    </div>
+                    <select
+                        name="id_pemasok"
+                        x-model="stockIn.supplier_id"
+                        class="w-full px-3.5 py-3 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 min-h-[48px]"
+                    >
+                        <option value="">-- Pilih Pemasok (Opsional: Pemasok Umum) --</option>
+                        <template x-for="sup in allSuppliers" :key="sup.id_pemasok">
+                            <option :value="sup.id_pemasok" x-text="sup.nama_pemasok + (sup.no_hp_pemasok ? ' (' + sup.no_hp_pemasok + ')' : '')"></option>
+                        </template>
+                    </select>
+                </div>
+
                 <!-- Subtotal Preview -->
                 <div class="bg-[#0B0E17] border border-[#232B3E] rounded-xl p-3 flex items-center justify-between">
                     <span class="text-xs text-slate-400 font-medium">Total Pengeluaran Kas:</span>
@@ -564,9 +641,79 @@ $customersData = array_map(function ($c) {
             <form method="POST" action="<?= url('/stock/out') ?>" class="space-y-4">
                 <?= csrf_field() ?>
                 <input type="hidden" name="product_id" :value="stockOut.product ? stockOut.product.id : ''">
+                <input type="hidden" name="cart_items" :value="stockOut.cart.length > 0 ? JSON.stringify(stockOut.cart.map(i => ({ product_id: i.id, quantity: i.quantity }))) : ''">
 
-                <!-- 1. Pilih Barang -->
-                <div>
+                <!-- 1. Pilihan Mode Kasir Multi-Item Cart (Khusus Penjualan) -->
+                <template x-if="stockOut.reason === 'sale'">
+                    <div class="space-y-2.5 pb-2 border-b border-[#232B3E]/80">
+                        <div class="flex items-center justify-between">
+                            <span class="text-xs font-bold text-white flex items-center space-x-1.5">
+                                <svg class="w-4 h-4 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M16 11V7a4 4 0 00-8 0v4M5 9h14l1 12H4L5 9z" />
+                                </svg>
+                                <span>Keranjang Kasir (<span x-text="stockOut.cart.length"></span> barang)</span>
+                            </span>
+                            <button
+                                type="button"
+                                @click="
+                                    if (stockOut.product && parseInt(stockOut.quantity) > 0) {
+                                        stockOut.addToCart(stockOut.product, stockOut.quantity);
+                                        stockOut.product = null;
+                                        stockOut.quantity = '';
+                                    } else {
+                                        pickerMode = 'addToCart';
+                                        productPickerOpen = true;
+                                    }
+                                "
+                                class="px-2.5 py-1 bg-indigo-600/30 hover:bg-indigo-600/50 border border-indigo-500/40 text-indigo-300 text-[11px] font-bold rounded-lg transition"
+                            >
+                                + Tambah ke Keranjang
+                            </button>
+                        </div>
+
+                        <!-- Daftar Item di Keranjang (jika ada) -->
+                        <template x-if="stockOut.cart.length > 0">
+                            <div class="bg-[#0B0E17] border border-[#232B3E] rounded-xl p-2.5 space-y-2">
+                                <template x-for="(item, idx) in stockOut.cart" :key="item.id">
+                                    <div class="flex items-center justify-between text-xs py-1 border-b border-[#232B3E]/60 last:border-b-0">
+                                        <div class="flex-1 pr-2">
+                                            <div class="font-bold text-white" x-text="item.name"></div>
+                                            <div class="text-[10px] text-slate-400">@ Rp <span x-text="Number(item.sell_price).toLocaleString('id-ID')"></span></div>
+                                        </div>
+                                        <div class="flex items-center space-x-2">
+                                            <button
+                                                type="button"
+                                                @click="item.quantity > 1 ? item.quantity-- : stockOut.removeFromCart(idx)"
+                                                class="w-6 h-6 rounded-md bg-[#161B29] border border-[#232B3E] text-white flex items-center justify-center font-bold"
+                                            >-</button>
+                                            <span class="font-bold text-white tabular-nums px-1" x-text="item.quantity"></span>
+                                            <button
+                                                type="button"
+                                                @click="item.quantity++"
+                                                class="w-6 h-6 rounded-md bg-[#161B29] border border-[#232B3E] text-white flex items-center justify-center font-bold"
+                                            >+</button>
+                                            <span class="w-16 text-right font-extrabold text-white text-[11px] tabular-nums">
+                                                Rp <span x-text="Number(item.quantity * item.sell_price).toLocaleString('id-ID')"></span>
+                                            </span>
+                                            <button
+                                                type="button"
+                                                @click="stockOut.removeFromCart(idx)"
+                                                class="text-rose-400 hover:text-rose-300 p-1"
+                                            >
+                                                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                                                </svg>
+                                            </button>
+                                        </div>
+                                    </div>
+                                </template>
+                            </div>
+                        </template>
+                    </div>
+                </template>
+
+                <!-- 2. Pilih Barang (Jika keranjang kosong atau bukan mode terjual) -->
+                <div x-show="stockOut.cart.length === 0">
                     <label class="block text-xs font-semibold text-slate-300 mb-1">
                         Pilih Barang <span class="text-rose-400">*</span>
                     </label>
@@ -591,8 +738,8 @@ $customersData = array_map(function ($c) {
                     </div>
                 </div>
 
-                <!-- 2. Jumlah Keluar -->
-                <div>
+                <!-- 3. Jumlah Keluar (Jika keranjang kosong) -->
+                <div x-show="stockOut.cart.length === 0">
                     <label for="stock_out_quantity" class="block text-xs font-semibold text-slate-300 mb-1">
                         Jumlah Keluar <span class="text-rose-400">*</span>
                     </label>
@@ -603,7 +750,6 @@ $customersData = array_map(function ($c) {
                         name="quantity"
                         x-model="stockOut.quantity"
                         placeholder="0"
-                        required
                         class="w-full px-4 py-3 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white text-sm font-bold tabular-nums focus:outline-none focus:ring-2 focus:ring-[#4B4EF0] focus:border-transparent min-h-[48px]"
                     >
 
@@ -613,7 +759,7 @@ $customersData = array_map(function ($c) {
                             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                             </svg>
-                            <span>Jumlah keluar melebihi stok fisik (<span x-text="stockOut.product.stock"></span> <span x-text="stockOut.product.unit"></span>)!</span>
+                            <span>Jumlah keluar melebihi stok fisik!</span>
                         </p>
                     </template>
                 </div>
@@ -714,6 +860,67 @@ $customersData = array_map(function ($c) {
                             </span>
                         </div>
 
+                        <!-- Input Uang Diterima & Kembalian (Khusus Tunai) -->
+                        <div x-show="stockOut.payment_method === 'cash'" class="space-y-1.5 pt-1">
+                            <label class="block text-xs font-semibold text-slate-300">
+                                Uang Diterima dari Pembeli (Tunai)
+                            </label>
+                            <input
+                                type="text"
+                                inputmode="numeric"
+                                name="cash_received"
+                                x-model="stockOut.cash_received"
+                                :placeholder="'Uang Pas: Rp ' + Number(stockOut.total).toLocaleString('id-ID')"
+                                class="w-full px-4 py-2.5 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white text-sm font-bold tabular-nums focus:outline-none focus:ring-2 focus:ring-emerald-500 min-h-[44px]"
+                            >
+                            <!-- Pilihan Uang Cepat -->
+                            <div class="flex items-center space-x-1.5 overflow-x-auto no-scrollbar pt-1">
+                                <button
+                                    type="button"
+                                    @click="stockOut.cash_received = stockOut.total"
+                                    class="px-2.5 py-1 rounded-lg bg-emerald-950/60 border border-emerald-500/30 text-[10px] font-bold text-emerald-300 flex-shrink-0"
+                                >
+                                    Uang Pas
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="stockOut.cash_received = 10000"
+                                    class="px-2 py-1 rounded-lg bg-[#0B0E17] border border-[#232B3E] text-[10px] font-semibold text-slate-300 flex-shrink-0"
+                                >
+                                    10rb
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="stockOut.cash_received = 20000"
+                                    class="px-2 py-1 rounded-lg bg-[#0B0E17] border border-[#232B3E] text-[10px] font-semibold text-slate-300 flex-shrink-0"
+                                >
+                                    20rb
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="stockOut.cash_received = 50000"
+                                    class="px-2 py-1 rounded-lg bg-[#0B0E17] border border-[#232B3E] text-[10px] font-semibold text-slate-300 flex-shrink-0"
+                                >
+                                    50rb
+                                </button>
+                                <button
+                                    type="button"
+                                    @click="stockOut.cash_received = 100000"
+                                    class="px-2 py-1 rounded-lg bg-[#0B0E17] border border-[#232B3E] text-[10px] font-semibold text-slate-300 flex-shrink-0"
+                                >
+                                    100rb
+                                </button>
+                            </div>
+
+                            <!-- Real-time Kembalian Banner -->
+                            <div class="p-2.5 bg-emerald-950/30 border border-emerald-500/30 rounded-xl flex items-center justify-between mt-2">
+                                <span class="text-xs text-slate-300 font-medium">Kembalian:</span>
+                                <span class="text-sm font-black text-emerald-400 tabular-nums">
+                                    Rp <span x-text="Number(stockOut.kembalian).toLocaleString('id-ID')"></span>
+                                </span>
+                            </div>
+                        </div>
+
                         <!-- Nama Pembeli Khusus KASBON -->
                         <div x-show="stockOut.payment_method === 'kasbon'" x-cloak class="space-y-1.5">
                             <label for="stock_out_customer" class="block text-xs font-semibold text-amber-300">
@@ -767,13 +974,13 @@ $customersData = array_map(function ($c) {
                 <div class="pt-2">
                     <button
                         type="submit"
-                        :disabled="!stockOut.product || !stockOut.quantity || stockOut.isOverStock || (stockOut.reason === 'sale' && stockOut.payment_method === 'kasbon' && !stockOut.customer_name.trim())"
+                        :disabled="(stockOut.cart.length === 0 && (!stockOut.product || !stockOut.quantity)) || stockOut.isOverStock || (stockOut.reason === 'sale' && stockOut.payment_method === 'kasbon' && !stockOut.customer_name.trim())"
                         class="w-full min-h-[48px] px-4 py-3 bg-[#4B4EF0] hover:bg-[#3A3BE0] disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-sm rounded-xl shadow-lg shadow-indigo-600/30 transition flex items-center justify-center space-x-2"
                     >
                         <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" />
                         </svg>
-                        <span x-text="stockOut.reason === 'sale' && stockOut.payment_method === 'kasbon' ? 'Simpan Penjualan Kasbon' : 'Simpan Barang Keluar'"></span>
+                        <span x-text="stockOut.reason === 'sale' && stockOut.payment_method === 'kasbon' ? 'Simpan Penjualan Kasbon' : (stockOut.cart.length > 0 ? ('Simpan Pesanan (' + stockOut.cart.length + ' barang)') : 'Simpan Barang Keluar')"></span>
                     </button>
                 </div>
             </form>
@@ -1120,6 +1327,67 @@ $customersData = array_map(function ($c) {
                         class="w-full py-3 bg-[#4B4EF0] hover:bg-[#3A3BE0] disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-lg transition flex items-center justify-center space-x-2"
                     >
                         <span x-text="quickProduct.isSaving ? 'Menyimpan...' : 'Simpan & Pilih'"></span>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL TAMBAH PEMASOK CEPAT -->
+    <div
+        x-show="quickSupplierOpen"
+        x-cloak
+        class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm"
+        @click.self="quickSupplierOpen = false"
+    >
+        <div class="w-full max-w-[360px] bg-[#161B29] border border-[#232B3E] rounded-3xl p-5 shadow-2xl relative">
+            <h3 class="text-sm font-bold text-white mb-3">Tambah Pemasok Baru Cepat</h3>
+            <div class="space-y-3">
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Nama Pemasok *</label>
+                    <input type="text" x-model="stockIn.quick_supplier_name" placeholder="Contoh: Agen Sumber Rejeki" class="w-full px-3.5 py-2.5 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                </div>
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1">Nomor WhatsApp / HP</label>
+                    <input type="tel" x-model="stockIn.quick_supplier_phone" placeholder="Contoh: 081234567890" class="w-full px-3.5 py-2.5 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                </div>
+                <div class="flex items-center space-x-2 pt-2">
+                    <button type="button" @click="quickSupplierOpen = false" class="flex-1 py-2.5 bg-[#0B0E17] border border-[#232B3E] text-slate-400 text-xs font-semibold rounded-xl">
+                        Batal
+                    </button>
+                    <button
+                        type="button"
+                        @click="
+                            if (!stockIn.quick_supplier_name || !stockIn.quick_supplier_name.trim()) return alert('Nama pemasok wajib diisi.');
+                            fetch('<?= url('/suppliers') ?>', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/x-www-form-urlencoded',
+                                    'X-Requested-With': 'XMLHttpRequest'
+                                },
+                                body: new URLSearchParams({
+                                    '_token': '<?= csrf_token() ?>',
+                                    'nama_pemasok': stockIn.quick_supplier_name,
+                                    'no_hp_pemasok': stockIn.quick_supplier_phone || ''
+                                })
+                            })
+                            .then(r => r.json())
+                            .then(data => {
+                                if (data.success && data.pemasok) {
+                                    allSuppliers.push(data.pemasok);
+                                    stockIn.supplier_id = data.pemasok.id_pemasok;
+                                    stockIn.quick_supplier_name = '';
+                                    stockIn.quick_supplier_phone = '';
+                                    quickSupplierOpen = false;
+                                } else {
+                                    alert(data.message || 'Gagal menyimpan');
+                                }
+                            })
+                            .catch(e => alert('Error koneksi'));
+                        "
+                        class="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold rounded-xl"
+                    >
+                        Simpan
                     </button>
                 </div>
             </div>

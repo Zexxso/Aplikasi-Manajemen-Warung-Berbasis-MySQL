@@ -68,23 +68,47 @@ $isPaid = ($receipt['payment_status'] === 'paid');
         </div>
 
         <!-- Items Table -->
-        <div class="py-2 border-b border-dashed border-slate-400">
-            <h2 class="font-extrabold text-slate-900 text-sm mb-1"><?= htmlspecialchars($receipt['product_name']) ?></h2>
-            <div class="flex justify-between text-[11px] text-slate-700">
-                <span><?= (int)$receipt['quantity'] ?> <?= htmlspecialchars($receipt['unit']) ?> x <?= format_rupiah($receipt['unit_price']) ?></span>
-                <span class="font-bold text-slate-900"><?= format_rupiah($receipt['subtotal']) ?></span>
-            </div>
+        <div class="py-2 border-b border-dashed border-slate-400 space-y-2">
+            <?php if (!empty($receipt['items'])): ?>
+                <?php foreach ($receipt['items'] as $item): ?>
+                    <div class="text-[11px]">
+                        <div class="font-extrabold text-slate-900"><?= htmlspecialchars($item['nama_produk'] ?? 'Barang') ?></div>
+                        <div class="flex justify-between text-slate-700">
+                            <span><?= (int)$item['jumlah'] ?> <?= htmlspecialchars($item['satuan'] ?? 'pcs') ?> x <?= format_rupiah($item['harga_satuan']) ?></span>
+                            <span class="font-bold text-slate-900"><?= format_rupiah($item['subtotal']) ?></span>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            <?php else: ?>
+                <div class="text-[11px]">
+                    <div class="font-extrabold text-slate-900"><?= htmlspecialchars($receipt['product_name'] ?? 'Barang') ?></div>
+                    <div class="flex justify-between text-slate-700">
+                        <span><?= (int)($receipt['quantity'] ?? 1) ?> <?= htmlspecialchars($receipt['unit'] ?? 'item') ?> x <?= format_rupiah($receipt['unit_price'] ?? $receipt['subtotal']) ?></span>
+                        <span class="font-bold text-slate-900"><?= format_rupiah($receipt['subtotal']) ?></span>
+                    </div>
+                </div>
+            <?php endif; ?>
             <?php if (!empty($receipt['note'])): ?>
                 <p class="text-[10px] text-slate-500 italic mt-1.5">Catatan: <?= htmlspecialchars($receipt['note']) ?></p>
             <?php endif; ?>
         </div>
 
-        <!-- Grand Total -->
-        <div class="py-1 border-b border-dashed border-slate-400">
-            <div class="flex justify-between items-baseline text-sm font-black">
+        <!-- Grand Total & Payment Summary -->
+        <div class="py-1.5 border-b border-dashed border-slate-400 space-y-1">
+            <div class="flex justify-between items-baseline text-xs font-black">
                 <span class="tracking-wider">TOTAL BELANJA:</span>
-                <span class="text-base text-slate-900"><?= format_rupiah($receipt['subtotal']) ?></span>
+                <span class="text-sm text-slate-900"><?= format_rupiah($receipt['total_harga'] ?? $receipt['subtotal']) ?></span>
             </div>
+            <?php if (!$isKasbon): ?>
+                <div class="flex justify-between text-[11px] text-slate-700">
+                    <span>Uang Diterima:</span>
+                    <span><?= format_rupiah($receipt['jumlah_bayar'] ?? ($receipt['total_harga'] ?? $receipt['subtotal'])) ?></span>
+                </div>
+                <div class="flex justify-between text-[11px] text-slate-900 font-extrabold">
+                    <span>Kembalian:</span>
+                    <span class="text-emerald-700"><?= format_rupiah($receipt['kembalian'] ?? 0) ?></span>
+                </div>
+            <?php endif; ?>
         </div>
 
         <!-- Footer -->

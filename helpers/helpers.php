@@ -34,7 +34,8 @@ function auth_user(): ?array
 
     if ($user) {
         $user['name'] = $user['nama'] ?? $user['name'] ?? '';
-        $user['shop_name'] = $user['nama_toko'] ?? $user['shop_name'] ?? '';
+        $user['shop_name'] = store_name();
+        $user['nama_toko'] = store_name();
         $user['role'] = $user['peran'] ?? $user['role'] ?? 'owner';
         $user['phone'] = $user['telepon'] ?? $user['phone'] ?? '';
         $user['owner_id'] = $user['id_pemilik'] ?? $user['owner_id'] ?? null;
@@ -74,25 +75,49 @@ function is_staff(): bool
     return $user && ($user['peran'] ?? $user['role'] ?? '') === 'staff';
 }
 
+function store_name(): string
+{
+    static $name = null;
+    if ($name !== null) return $name;
+
+    $envPath = __DIR__ . '/../.env';
+    if (file_exists($envPath)) {
+        $lines = file($envPath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+        foreach ($lines as $line) {
+            $line = trim($line);
+            if (str_starts_with($line, 'STORE_NAME=')) {
+                $val = trim(substr($line, 11), " \t\n\r\0\x0B\"'");
+                if (!empty($val)) {
+                    $name = $val;
+                    return $name;
+                }
+            }
+        }
+    }
+    $name = 'Warung Bu Sari';
+    return $name;
+}
+
 function warung_owner_id(): int
 {
-    $user = auth_user();
-    if (!$user) return 0;
-    $role = $user['peran'] ?? $user['role'] ?? 'owner';
-    $ownerId = $user['id_pemilik'] ?? $user['owner_id'] ?? null;
-    if ($role === 'staff' && !empty($ownerId)) {
-        return (int) $ownerId;
-    }
-    return (int) $user['id'];
+    static $ownerId = null;
+    if ($ownerId !== null) return $ownerId;
+    $stmt = db()->query("SELECT id FROM pengguna WHERE peran = 'owner' ORDER BY id ASC LIMIT 1");
+    $ownerId = (int)($stmt->fetchColumn() ?: 1);
+    return $ownerId;
 }
 
 function get_warung_owner(): ?array
 {
     $ownerId = warung_owner_id();
-    if (!$ownerId) return null;
     $stmt = db()->prepare("SELECT * FROM pengguna WHERE id = :id LIMIT 1");
     $stmt->execute(['id' => $ownerId]);
-    return $stmt->fetch() ?: null;
+    $owner = $stmt->fetch() ?: null;
+    if ($owner) {
+        $owner['nama_toko'] = store_name();
+        $owner['shop_name'] = store_name();
+    }
+    return $owner;
 }
 
 // --- CSRF Helpers ---
@@ -279,54 +304,57 @@ function view(string $viewPath, array $data = [], string $layout = 'app'): void
     // Global data when user is authenticated
     if (auth_check()) {
         $user = auth_user();
-        $ownerId = warung_owner_id();
 
         if (!isset($globalProducts)) {
-            $stmt = db()->prepare("
+            $stmt = db()->query("
                 SELECT id, nama, satuan, gambar, harga_beli, harga_jual, stok, stok_minimum, id_kategori,
                        nama AS name, satuan AS unit, gambar AS image, harga_beli AS buy_price, harga_jual AS sell_price, stok AS stock, stok_minimum AS min_stock, id_kategori AS category_id
                 FROM produk 
-                WHERE id_pengguna = :id_pengguna AND dihapus_pada IS NULL AND status_aktif = 1 
+                WHERE dihapus_pada IS NULL AND status_aktif = 1 
                 ORDER BY nama ASC
             ");
-            $stmt->execute(['id_pengguna' => $ownerId]);
             $globalProducts = $stmt->fetchAll();
         }
 
         if (!isset($globalCashCategories)) {
-            $stmt = db()->prepare("
-                SELECT id, nama, jenis, id_pengguna,
-                       nama AS name, jenis AS type, id_pengguna AS user_id
+            $stmt = db()->query("
+                SELECT id, nama, jenis,
+                       nama AS name, jenis AS type
                 FROM kategori_kas 
-                WHERE (id_pengguna = :id_pengguna OR id_pengguna IS NULL)
                 ORDER BY nama ASC
             ");
-            $stmt->execute(['id_pengguna' => $ownerId]);
             $globalCashCategories = $stmt->fetchAll();
         }
 
         if (!isset($globalProductCategories)) {
-            $stmt = db()->prepare("
-                SELECT id, nama, id_pengguna,
-                       nama AS name, id_pengguna AS user_id
+            $stmt = db()->query("
+                SELECT id, nama,
+                       nama AS name
                 FROM kategori 
-                WHERE id_pengguna = :id_pengguna
                 ORDER BY nama ASC
             ");
-            $stmt->execute(['id_pengguna' => $ownerId]);
             $globalProductCategories = $stmt->fetchAll();
         }
 
         if (!isset($globalCustomers)) {
-            $stmt = db()->prepare("
+            $stmt = db()->query("
                 SELECT id, kode, nama, telepon, catatan,
                        kode AS code, nama AS name, telepon AS phone, catatan AS note
                 FROM pelanggan 
-                WHERE id_pengguna = :id_pengguna AND dihapus_pada IS NULL
+                WHERE dihapus_pada IS NULL
                 ORDER BY nama ASC
             ");
-            $stmt->execute(['id_pengguna' => $ownerId]);
             $globalCustomers = $stmt->fetchAll();
+        }
+
+        if (!isset($globalSuppliers)) {
+            $stmt = db()->query("
+                SELECT id_pemasok, nama_pemasok, no_hp_pemasok, alamat_pemasok
+                FROM pemasok 
+                WHERE dihapus_pada IS NULL
+                ORDER BY nama_pemasok ASC
+            ");
+            $globalSuppliers = $stmt->fetchAll();
         }
     }
 
@@ -366,16 +394,15 @@ function generate_invoice_no(int $movementId, ?string $date = null): string
     return sprintf('TRX-%s-%04d', $d, $movementId);
 }
 
-function generate_next_customer_code(int $ownerId): string
+function generate_next_customer_code(?int $ownerId = null): string
 {
-    $stmt = db()->prepare("
+    $stmt = db()->query("
         SELECT kode 
         FROM pelanggan 
-        WHERE id_pengguna = :id_pengguna AND kode LIKE 'CUST-%'
+        WHERE kode LIKE 'CUST-%'
         ORDER BY id DESC
         LIMIT 100
     ");
-    $stmt->execute(['id_pengguna' => $ownerId]);
     $codes = $stmt->fetchAll(PDO::FETCH_COLUMN);
 
     $maxNum = 0;
@@ -392,7 +419,7 @@ function generate_next_customer_code(int $ownerId): string
     return sprintf('CUST-%03d', $next);
 }
 
-function get_or_create_kasbon_customer(int $ownerId, string $customerInput, ?string $phone = null): ?int
+function get_or_create_kasbon_customer(?int $ownerId, string $customerInput, ?string $phone = null): ?int
 {
     $input = trim($customerInput);
     if ($input === '') {
@@ -401,8 +428,8 @@ function get_or_create_kasbon_customer(int $ownerId, string $customerInput, ?str
 
     // 1. If numeric ID passed (selected from list)
     if (ctype_digit($input)) {
-        $chk = db()->prepare("SELECT id FROM pelanggan WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL LIMIT 1");
-        $chk->execute(['id' => (int) $input, 'id_pengguna' => $ownerId]);
+        $chk = db()->prepare("SELECT id FROM pelanggan WHERE id = :id AND dihapus_pada IS NULL LIMIT 1");
+        $chk->execute(['id' => (int) $input]);
         $foundId = $chk->fetchColumn();
         if ($foundId) {
             return (int) $foundId;
@@ -412,11 +439,10 @@ function get_or_create_kasbon_customer(int $ownerId, string $customerInput, ?str
     // 2. If matching existing code or name (case-insensitive)
     $findStmt = db()->prepare("
         SELECT id FROM pelanggan 
-        WHERE id_pengguna = :id_pengguna AND dihapus_pada IS NULL AND (LOWER(nama) = LOWER(:nama_input) OR LOWER(kode) = LOWER(:kode_input))
+        WHERE dihapus_pada IS NULL AND (LOWER(nama) = LOWER(:nama_input) OR LOWER(kode) = LOWER(:kode_input))
         ORDER BY id DESC LIMIT 1
     ");
     $findStmt->execute([
-        'id_pengguna' => $ownerId,
         'nama_input' => $input,
         'kode_input' => $input,
     ]);
@@ -426,13 +452,12 @@ function get_or_create_kasbon_customer(int $ownerId, string $customerInput, ?str
     }
 
     // 3. Otherwise, create a new kasbon customer record with the specified name
-    $code = generate_next_customer_code($ownerId);
+    $code = generate_next_customer_code();
     $ins = db()->prepare("
-        INSERT INTO pelanggan (id_pengguna, kode, nama, telepon, dibuat_pada, diperbarui_pada)
-        VALUES (:id_pengguna, :kode, :nama, :telepon, NOW(), NOW())
+        INSERT INTO pelanggan (kode, nama, telepon, dibuat_pada, diperbarui_pada)
+        VALUES (:kode, :nama, :telepon, NOW(), NOW())
     ");
     $ins->execute([
-        'id_pengguna' => $ownerId,
         'kode' => $code,
         'nama' => $input,
         'telepon' => $phone ?: null,

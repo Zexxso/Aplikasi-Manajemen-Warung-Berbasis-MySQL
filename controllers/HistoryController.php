@@ -65,8 +65,7 @@ class HistoryController
                 LEFT JOIN mutasi_stok sm ON sm.id = ce.id_mutasi_stok
                 LEFT JOIN produk p ON p.id = sm.id_produk
                 LEFT JOIN pelanggan cust ON cust.id = COALESCE(sm.id_pelanggan, ce.id_pelanggan)
-                WHERE ce.id_pengguna = :id_pengguna 
-                  AND ce.dihapus_pada IS NULL
+                WHERE ce.dihapus_pada IS NULL
             ";
 
             if ($filter === 'stock') {
@@ -76,7 +75,7 @@ class HistoryController
             $sql .= " ORDER BY ce.tanggal_transaksi DESC, ce.id DESC";
 
             $stmt = db()->prepare($sql);
-            $stmt->execute(['id_pengguna' => $ownerId]);
+            $stmt->execute();
             $cashEntries = $stmt->fetchAll();
 
             foreach ($cashEntries as $cash) {
@@ -171,15 +170,14 @@ class HistoryController
                 FROM mutasi_stok sm
                 LEFT JOIN produk p ON p.id = sm.id_produk
                 LEFT JOIN pelanggan cust ON cust.id = sm.id_pelanggan
-                WHERE sm.id_pengguna = :id_pengguna 
-                  AND sm.dihapus_pada IS NULL
+                WHERE sm.dihapus_pada IS NULL
                   AND sm.id NOT IN (
                       SELECT id_mutasi_stok FROM catatan_kas 
                       WHERE id_mutasi_stok IS NOT NULL AND dihapus_pada IS NULL
                   )
                 ORDER BY sm.tanggal_mutasi DESC, sm.id DESC
             ");
-            $stmt->execute(['id_pengguna' => $ownerId]);
+            $stmt->execute();
             $pureMovements = $stmt->fetchAll();
 
             foreach ($pureMovements as $sm) {
@@ -278,8 +276,8 @@ class HistoryController
             $pdo->beginTransaction();
 
             if ($type === 'stock') {
-                $stmt = $pdo->prepare("SELECT * FROM mutasi_stok WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL FOR UPDATE");
-                $stmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+                $stmt = $pdo->prepare("SELECT * FROM mutasi_stok WHERE id = :id AND dihapus_pada IS NULL FOR UPDATE");
+                $stmt->execute(['id' => $id]);
                 $movement = $stmt->fetch();
 
                 if (!$movement) {
@@ -289,8 +287,8 @@ class HistoryController
                 $productId = $movement['id_produk'] ?? $movement['product_id'];
 
                 // Get product
-                $prodStmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id AND id_pengguna = :id_pengguna FOR UPDATE");
-                $prodStmt->execute(['id' => $productId, 'id_pengguna' => $ownerId]);
+                $prodStmt = $pdo->prepare("SELECT * FROM produk WHERE id = :id FOR UPDATE");
+                $prodStmt->execute(['id' => $productId]);
                 $product = $prodStmt->fetch();
 
                 if ($product) {
@@ -316,20 +314,30 @@ class HistoryController
                 }
 
                 // Soft delete associated cash entry
-                $delCash = $pdo->prepare("UPDATE catatan_kas SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id_mutasi_stok = :movement_id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL");
-                $delCash->execute(['movement_id' => $id, 'id_pengguna' => $ownerId]);
+                $delCash = $pdo->prepare("UPDATE catatan_kas SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id_mutasi_stok = :movement_id AND dihapus_pada IS NULL");
+                $delCash->execute(['movement_id' => $id]);
+
+                // Soft delete associated suplai if exists
+                $delSuplai = $pdo->prepare("UPDATE suplai SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id_mutasi_stok = :movement_id AND dihapus_pada IS NULL");
+                $delSuplai->execute(['movement_id' => $id]);
+
+                // Soft delete associated pesanan if single-item or linked
+                if (!empty($movement['id_pesanan'])) {
+                    $delOrder = $pdo->prepare("UPDATE pesanan SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id_pesanan = :id_pesanan AND dihapus_pada IS NULL");
+                    $delOrder->execute(['id_pesanan' => $movement['id_pesanan']]);
+                }
 
                 // Soft delete stock movement
-                $delMov = $pdo->prepare("UPDATE mutasi_stok SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id = :id AND id_pengguna = :id_pengguna");
-                $delMov->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+                $delMov = $pdo->prepare("UPDATE mutasi_stok SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id = :id");
+                $delMov->execute(['id' => $id]);
 
                 $productName = $product['nama'] ?? $product['name'] ?? 'Barang';
                 $pdo->commit();
 
                 set_flash('status', "Transaksi {$productName} berhasil dihapus. Stok dan catatan kas telah dikembalikan.");
             } elseif ($type === 'cash') {
-                $stmt = $pdo->prepare("SELECT * FROM catatan_kas WHERE id = :id AND id_pengguna = :id_pengguna AND dihapus_pada IS NULL FOR UPDATE");
-                $stmt->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+                $stmt = $pdo->prepare("SELECT * FROM catatan_kas WHERE id = :id AND dihapus_pada IS NULL FOR UPDATE");
+                $stmt->execute(['id' => $id]);
                 $cash = $stmt->fetch();
 
                 if (!$cash) {
@@ -344,8 +352,8 @@ class HistoryController
                     return;
                 }
 
-                $delCash = $pdo->prepare("UPDATE catatan_kas SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id = :id AND id_pengguna = :id_pengguna");
-                $delCash->execute(['id' => $id, 'id_pengguna' => $ownerId]);
+                $delCash = $pdo->prepare("UPDATE catatan_kas SET dihapus_pada = NOW(), diperbarui_pada = NOW() WHERE id = :id");
+                $delCash->execute(['id' => $id]);
 
                 $note = ($cash['catatan'] ?? $cash['note']) ?: 'Transaksi kas';
                 $pdo->commit();

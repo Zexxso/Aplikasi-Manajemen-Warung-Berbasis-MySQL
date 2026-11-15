@@ -104,6 +104,15 @@
                                         </svg>
                                         <span><?= htmlspecialchars($staffPhone) ?></span>
                                     </p>
+                                    <?php if (!empty($staff['alamat'])): ?>
+                                        <p class="text-[11px] text-slate-400 flex items-center space-x-1 mt-0.5">
+                                            <svg class="w-3.5 h-3.5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" />
+                                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" />
+                                            </svg>
+                                            <span class="truncate max-w-[180px]"><?= htmlspecialchars($staff['alamat']) ?></span>
+                                        </p>
+                                    <?php endif; ?>
                                 </div>
                             </div>
 
@@ -238,6 +247,20 @@
                         required
                         class="w-full px-4 py-3 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white placeholder-slate-500 text-sm tabular-nums focus:outline-none focus:ring-2 focus:ring-[#4B4EF0] min-h-[48px]"
                     >
+                </div>
+
+                <!-- Alamat Tinggal -->
+                <div>
+                    <label for="staff_address" class="block text-xs font-semibold text-slate-300 mb-1.5">
+                        Alamat Tinggal Pegawai (Opsional)
+                    </label>
+                    <textarea
+                        id="staff_address"
+                        name="alamat"
+                        rows="2"
+                        placeholder="Contoh: Jl. Merpati No. 12, RT 02/RW 04"
+                        class="w-full px-4 py-2.5 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#4B4EF0]"
+                    ></textarea>
                 </div>
 
                 <!-- Password Default -->

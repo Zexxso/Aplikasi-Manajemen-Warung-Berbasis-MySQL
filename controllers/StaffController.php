@@ -24,14 +24,13 @@ class StaffController
         $owner = $this->ensureOwner();
 
         $stmt = db()->prepare("
-            SELECT id, nama, email, telepon, status_aktif, peran, id_pemilik, nama_toko, dibuat_pada, diperbarui_pada,
-                   nama AS name, telepon AS phone, status_aktif AS is_active, peran AS role, id_pemilik AS owner_id, nama_toko AS shop_name
+            SELECT id, nama, email, telepon, alamat, status_aktif, peran, dibuat_pada, diperbarui_pada,
+                   nama AS name, telepon AS phone, status_aktif AS is_active, peran AS role
             FROM pengguna 
-            WHERE id_pemilik = :id_pemilik 
-              AND peran = 'staff' 
+            WHERE peran = 'staff' 
             ORDER BY nama ASC
         ");
-        $stmt->execute(['id_pemilik' => $owner['id']]);
+        $stmt->execute();
         $staffMembers = $stmt->fetchAll();
 
         view('staff.index', [
@@ -50,8 +49,9 @@ class StaffController
             back();
         }
 
-        $name = trim($_POST['name'] ?? '');
-        $phone = trim($_POST['phone'] ?? '');
+        $name = trim($_POST['name'] ?? $_POST['nama'] ?? '');
+        $phone = trim($_POST['phone'] ?? $_POST['telepon'] ?? '');
+        $address = trim($_POST['alamat'] ?? $_POST['address'] ?? '');
         $password = trim($_POST['password'] ?? '');
         $defaultPassword = !empty($password) ? $password : '123456';
 
@@ -70,15 +70,14 @@ class StaffController
 
         $hashed = password_hash($defaultPassword, PASSWORD_BCRYPT);
         $insStmt = db()->prepare("
-            INSERT INTO pengguna (nama, telepon, email, kata_sandi, peran, id_pemilik, nama_toko, status_aktif, dibuat_pada, diperbarui_pada)
-            VALUES (:nama, :telepon, NULL, :kata_sandi, 'staff', :id_pemilik, :nama_toko, 1, NOW(), NOW())
+            INSERT INTO pengguna (nama, telepon, alamat, email, kata_sandi, peran, status_aktif, dibuat_pada, diperbarui_pada)
+            VALUES (:nama, :telepon, :alamat, NULL, :kata_sandi, 'staff', 1, NOW(), NOW())
         ");
         $insStmt->execute([
             'nama' => $name,
             'telepon' => $phone,
+            'alamat' => $address ?: null,
             'kata_sandi' => $hashed,
-            'id_pemilik' => $owner['id'],
-            'nama_toko' => $owner['nama_toko'] ?? $owner['shop_name'] ?? 'Warung',
         ]);
 
         set_flash('status', "Akun karyawan {$name} berhasil ditambahkan dengan kata sandi: {$defaultPassword}");
@@ -94,8 +93,8 @@ class StaffController
             back();
         }
 
-        $stmt = db()->prepare("SELECT * FROM pengguna WHERE id = :id AND id_pemilik = :id_pemilik AND peran = 'staff' LIMIT 1");
-        $stmt->execute(['id' => $id, 'id_pemilik' => $owner['id']]);
+        $stmt = db()->prepare("SELECT * FROM pengguna WHERE id = :id AND peran = 'staff' LIMIT 1");
+        $stmt->execute(['id' => $id]);
         $staff = $stmt->fetch();
 
         if (!$staff) {
@@ -123,8 +122,8 @@ class StaffController
             back();
         }
 
-        $stmt = db()->prepare("SELECT * FROM pengguna WHERE id = :id AND id_pemilik = :id_pemilik AND peran = 'staff' LIMIT 1");
-        $stmt->execute(['id' => $id, 'id_pemilik' => $owner['id']]);
+        $stmt = db()->prepare("SELECT * FROM pengguna WHERE id = :id AND peran = 'staff' LIMIT 1");
+        $stmt->execute(['id' => $id]);
         $staff = $stmt->fetch();
 
         if (!$staff) {

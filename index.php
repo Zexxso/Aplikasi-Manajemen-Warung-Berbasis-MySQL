@@ -17,6 +17,7 @@ require_once __DIR__ . '/controllers/HistoryController.php';
 require_once __DIR__ . '/controllers/ReportController.php';
 require_once __DIR__ . '/controllers/StaffController.php';
 require_once __DIR__ . '/controllers/CustomerController.php';
+require_once __DIR__ . '/controllers/SupplierController.php';
 
 // Determine HTTP Method (Support Method Spoofing for PUT, PATCH, DELETE)
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -186,6 +187,33 @@ switch (true) {
 
     case preg_match('#^/staff/(\d+)/reset-password$#', $uri, $matches) && $method === 'POST':
         (new StaffController())->resetPassword((int) $matches[1]);
+        break;
+
+    // -------------------------------------------------------------
+    // Suppliers Management (/suppliers & /suppliers/{id})
+    // -------------------------------------------------------------
+    case $uri === '/suppliers' && $method === 'GET':
+        (new SupplierController())->index();
+        break;
+
+    case $uri === '/suppliers' && $method === 'POST':
+        (new SupplierController())->store();
+        break;
+
+    case preg_match('#^/suppliers/(\d+)/update$#', $uri, $matches) && $method === 'POST':
+        (new SupplierController())->update((int) $matches[1]);
+        break;
+
+    case preg_match('#^/suppliers/(\d+)/delete$#', $uri, $matches) && $method === 'POST':
+        (new SupplierController())->destroy((int) $matches[1]);
+        break;
+
+    case preg_match('#^/suppliers/(\d+)$#', $uri, $matches) && $method === 'GET':
+        (new SupplierController())->show((int) $matches[1]);
+        break;
+
+    case $uri === '/api/suppliers' && $method === 'GET':
+        (new SupplierController())->apiList();
         break;
 
     // -------------------------------------------------------------

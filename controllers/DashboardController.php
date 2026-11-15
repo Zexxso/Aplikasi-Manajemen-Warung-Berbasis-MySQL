@@ -55,18 +55,16 @@ class DashboardController
         $prevStartStr = $prevStart->format('Y-m-d H:i:s');
         $prevEndStr = $prevEnd->format('Y-m-d H:i:s');
 
-        // Current period metrics
+        // Current period metrics (Single-store: Warung Bu Sari)
         $sumStmt = db()->prepare("
             SELECT 
                 COALESCE(SUM(CASE WHEN jenis = 'income' THEN nominal ELSE 0 END), 0) AS income,
                 COALESCE(SUM(CASE WHEN jenis = 'expense' THEN nominal ELSE 0 END), 0) AS expense
             FROM catatan_kas
-            WHERE id_pengguna = :id_pengguna 
-              AND dihapus_pada IS NULL 
+            WHERE dihapus_pada IS NULL 
               AND tanggal_transaksi BETWEEN :start AND :end
         ");
         $sumStmt->execute([
-            'id_pengguna' => $ownerId,
             'start' => $startStr,
             'end' => $endStr,
         ]);
@@ -81,12 +79,10 @@ class DashboardController
                 COALESCE(SUM(CASE WHEN jenis = 'income' THEN nominal ELSE 0 END), 0) AS income,
                 COALESCE(SUM(CASE WHEN jenis = 'expense' THEN nominal ELSE 0 END), 0) AS expense
             FROM catatan_kas
-            WHERE id_pengguna = :id_pengguna 
-              AND dihapus_pada IS NULL 
+            WHERE dihapus_pada IS NULL 
               AND tanggal_transaksi BETWEEN :start AND :end
         ");
         $prevSumStmt->execute([
-            'id_pengguna' => $ownerId,
             'start' => $prevStartStr,
             'end' => $prevEndStr,
         ]);
@@ -116,12 +112,11 @@ class DashboardController
         $lowStockStmt = db()->prepare("
             SELECT COUNT(*) AS total
             FROM produk
-            WHERE id_pengguna = :id_pengguna 
-              AND dihapus_pada IS NULL 
+            WHERE dihapus_pada IS NULL 
               AND status_aktif = 1 
               AND stok <= stok_minimum
         ");
-        $lowStockStmt->execute(['id_pengguna' => $ownerId]);
+        $lowStockStmt->execute();
         $lowStockCount = (int) $lowStockStmt->fetchColumn();
 
         // Recent 5 transactions
@@ -159,12 +154,11 @@ class DashboardController
             LEFT JOIN mutasi_stok sm ON sm.id = ce.id_mutasi_stok
             LEFT JOIN produk p ON p.id = sm.id_produk
             LEFT JOIN pelanggan cust ON cust.id = COALESCE(sm.id_pelanggan, ce.id_pelanggan)
-            WHERE ce.id_pengguna = :id_pengguna 
-              AND ce.dihapus_pada IS NULL
+            WHERE ce.dihapus_pada IS NULL
             ORDER BY ce.tanggal_transaksi DESC, ce.id DESC
             LIMIT 5
         ");
-        $recentStmt->execute(['id_pengguna' => $ownerId]);
+        $recentStmt->execute();
         $recentTransactions = $recentStmt->fetchAll();
 
         // Greeting
