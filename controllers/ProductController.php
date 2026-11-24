@@ -251,6 +251,13 @@ class ProductController
 
         clear_old();
         set_flash('status', "Barang {$name} berhasil diperbarui.");
+
+        // Notifikasi: perubahan harga jual
+        $oldSellPrice = (float) ($product['harga_jual'] ?? $product['sell_price'] ?? 0);
+        if ($oldSellPrice > 0 && abs($sellPrice - $oldSellPrice) > 0.01) {
+            notif_perubahan_harga($id, $name, $oldSellPrice, $sellPrice);
+        }
+
         redirect('/products');
     }
 

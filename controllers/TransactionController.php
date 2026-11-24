@@ -465,6 +465,11 @@ class TransactionController
                 $changeText = $kembalian > 0 ? " · Kembalian: " . format_rupiah($kembalian) : "";
                 set_flash('status', "Penjualan Tunai ({$invoiceNo}) berhasil dicatat! Total: " . format_rupiah($totalHarga) . $changeText . " · <a href='" . url('/receipt/' . $firstMovementId) . "' class='underline font-bold text-white'>Lihat Struk</a>");
             }
+
+            // Notifikasi: cek stok menipis setelah setiap item terjual
+            foreach ($validatedItems as $vi) {
+                notif_stok_setelah_keluar((int) $vi['product']['id']);
+            }
         } catch (Exception $e) {
             if ($pdo->inTransaction()) {
                 $pdo->rollBack();
@@ -534,6 +539,12 @@ class TransactionController
 
             $typeLabel = ($type === 'income') ? 'Pemasukan' : 'Pengeluaran';
             set_flash('status', "{$typeLabel} kas sebesar " . format_rupiah($cleanAmount) . " berhasil dicatat!");
+
+            // Notifikasi: pengeluaran besar
+            if ($type === 'expense') {
+                $kasId = (int) db()->lastInsertId();
+                notif_pengeluaran_besar($cleanAmount, $kasId, $noteText);
+            }
         } catch (Exception $e) {
             set_flash('error', $e->getMessage());
         }

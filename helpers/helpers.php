@@ -9,6 +9,7 @@ if (ob_get_level() === 0) {
 }
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/notifications.php';
 
 // --- Authentication Helpers ---
 

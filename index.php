@@ -18,6 +18,7 @@ require_once __DIR__ . '/controllers/ReportController.php';
 require_once __DIR__ . '/controllers/StaffController.php';
 require_once __DIR__ . '/controllers/CustomerController.php';
 require_once __DIR__ . '/controllers/SupplierController.php';
+require_once __DIR__ . '/controllers/NotificationController.php';
 
 // Determine HTTP Method (Support Method Spoofing for PUT, PATCH, DELETE)
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -214,6 +215,25 @@ switch (true) {
 
     case $uri === '/api/suppliers' && $method === 'GET':
         (new SupplierController())->apiList();
+        break;
+
+    // -------------------------------------------------------------
+    // Notifications
+    // -------------------------------------------------------------
+    case $uri === '/notifications' && $method === 'GET':
+        (new NotificationController())->index();
+        break;
+
+    case preg_match('#^/notifications/(\d+)/read$#', $uri, $matches) && $method === 'POST':
+        (new NotificationController())->markRead();
+        break;
+
+    case $uri === '/notifications/read-all' && $method === 'POST':
+        (new NotificationController())->markAllRead();
+        break;
+
+    case $uri === '/api/notifications/badge' && $method === 'GET':
+        (new NotificationController())->badge();
         break;
 
     // -------------------------------------------------------------

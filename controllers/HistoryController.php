@@ -334,6 +334,9 @@ class HistoryController
                 $productName = $product['nama'] ?? $product['name'] ?? 'Barang';
                 $pdo->commit();
 
+                // Notifikasi: transaksi dihapus
+                notif_transaksi_dihapus($productName, $id);
+
                 set_flash('status', "Transaksi {$productName} berhasil dihapus. Stok dan catatan kas telah dikembalikan.");
             } elseif ($type === 'cash') {
                 $stmt = $pdo->prepare("SELECT * FROM catatan_kas WHERE id = :id AND dihapus_pada IS NULL FOR UPDATE");
