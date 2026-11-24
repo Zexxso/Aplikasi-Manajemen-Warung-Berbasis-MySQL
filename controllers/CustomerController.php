@@ -124,13 +124,14 @@ class CustomerController
                 sm.tanggal_mutasi,
                 sm.status_pembayaran AS payment_status,
                 sm.status_pembayaran,
-                sm.metode_pembayaran,
+                COALESCE(pes.metode_pembayaran, CASE WHEN sm.status_pembayaran = 'debt' THEN 'kasbon' ELSE 'cash' END) AS metode_pembayaran,
                 sm.dibayar_pada AS paid_at,
                 sm.dibayar_pada,
                 sm.catatan AS note,
                 sm.catatan,
                 ce.id AS cash_id
             FROM mutasi_stok sm
+            LEFT JOIN pesanan pes ON pes.id_pesanan = sm.id_pesanan
             LEFT JOIN produk p ON p.id = sm.id_produk
             LEFT JOIN catatan_kas ce ON ce.id_mutasi_stok = sm.id AND ce.dihapus_pada IS NULL
             WHERE sm.id_pelanggan = :id_pelanggan 
