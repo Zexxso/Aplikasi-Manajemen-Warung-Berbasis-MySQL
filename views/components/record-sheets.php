@@ -264,20 +264,40 @@ $suppliersData = array_map(function ($s) {
             return this.cashCategories.filter(c => c.type === this.cash.type);
         },
         async submitQuickProduct() {
-            if (!this.quickProduct.name || !this.quickProduct.buy_price || !this.quickProduct.sell_price) {
-                alert('Mohon isi nama, harga beli, dan harga jual barang.');
+            if (!this.quickProduct.name || !this.quickProduct.name.trim()) {
+                alert('Nama barang wajib diisi.');
+                return;
+            }
+            if (this.quickProduct.buy_price === '' || this.quickProduct.sell_price === '') {
+                alert('Mohon isi harga beli dan harga jual barang.');
                 return;
             }
             this.quickProduct.isSaving = true;
             try {
+                const csrfEl = document.querySelector('meta[name=csrf-token]');
+                const csrfToken = csrfEl ? csrfEl.content : '';
                 const response = await fetch('<?= url('/products/quick-store') ?>', {
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'Accept': 'application/json',
-                        'X-CSRF-TOKEN': document.querySelector('meta[name=csrf-token]').content
+                        'X-CSRF-TOKEN': csrfToken
                     },
-                    body: JSON.stringify(this.quickProduct)
+                    body: JSON.stringify({
+                        _token: csrfToken,
+                        name: this.quickProduct.name,
+                        nama: this.quickProduct.name,
+                        unit: this.quickProduct.unit || 'pcs',
+                        satuan: this.quickProduct.unit || 'pcs',
+                        category_id: this.quickProduct.category_id || '',
+                        id_kategori: this.quickProduct.category_id || '',
+                        buy_price: this.quickProduct.buy_price,
+                        harga_beli: this.quickProduct.buy_price,
+                        sell_price: this.quickProduct.sell_price,
+                        harga_jual: this.quickProduct.sell_price,
+                        stock: this.quickProduct.stock || 0,
+                        stok: this.quickProduct.stock || 0
+                    })
                 });
                 const res = await response.json();
                 if (res.success && res.product) {
@@ -291,6 +311,7 @@ $suppliersData = array_map(function ($s) {
                     this.quickProduct.name = '';
                     this.quickProduct.buy_price = '';
                     this.quickProduct.sell_price = '';
+                    this.quickProduct.category_id = '';
                 } else if (res.message) {
                     alert(res.message);
                 }

@@ -562,13 +562,29 @@ class TransactionController
             json_response(['success' => false, 'message' => 'Token keamanan tidak valid.'], 400);
         }
 
+        // Support both application/json payload and form-urlencoded POST
+        $input = $_POST;
+        $rawInput = file_get_contents('php://input');
+        if (!empty($rawInput)) {
+            $json = json_decode($rawInput, true);
+            if (is_array($json)) {
+                $input = array_merge($input, $json);
+            }
+        }
+
         $userId = (int) auth_user()['id'];
-        $name = trim($_POST['nama'] ?? $_POST['name'] ?? '');
-        $categoryId = !empty($_POST['id_kategori'] ?? $_POST['category_id']) ? (int) ($_POST['id_kategori'] ?? $_POST['category_id']) : null;
-        $unit = trim($_POST['satuan'] ?? $_POST['unit'] ?? 'pcs') ?: 'pcs';
-        $buyPrice = (float) ($_POST['harga_beli'] ?? $_POST['buy_price'] ?? 0);
-        $sellPrice = (float) ($_POST['harga_jual'] ?? $_POST['sell_price'] ?? 0);
-        $stock = (int) ($_POST['stok'] ?? $_POST['stock'] ?? 0);
+        $name = trim($input['nama'] ?? $input['name'] ?? '');
+        $categoryId = !empty($input['id_kategori'] ?? $input['category_id']) ? (int) ($input['id_kategori'] ?? $input['category_id']) : null;
+        $unit = trim($input['satuan'] ?? $input['unit'] ?? 'pcs') ?: 'pcs';
+
+        // Robust currency/number sanitization (strip non-digits)
+        $rawBuy = preg_replace('/[^\d]/', '', (string)($input['harga_beli'] ?? $input['buy_price'] ?? '0'));
+        $rawSell = preg_replace('/[^\d]/', '', (string)($input['harga_jual'] ?? $input['sell_price'] ?? '0'));
+        $rawStock = preg_replace('/[^\d]/', '', (string)($input['stok'] ?? $input['stock'] ?? '0'));
+
+        $buyPrice = (float) ($rawBuy !== '' ? $rawBuy : 0);
+        $sellPrice = (float) ($rawSell !== '' ? $rawSell : 0);
+        $stock = (int) ($rawStock !== '' ? $rawStock : 0);
 
         if ($name === '') {
             json_response(['success' => false, 'message' => 'Nama barang wajib diisi.'], 422);
@@ -581,8 +597,8 @@ class TransactionController
         $pdo = db();
         try {
             $stmt = $pdo->prepare("
-                INSERT INTO produk (id_kategori, nama, satuan, harga_beli, harga_jual, stok, status_aktif, dibuat_pada, diperbarui_pada)
-                VALUES (:id_kategori, :name, :unit, :buy_price, :sell_price, :stock, 1, NOW(), NOW())
+                INSERT INTO produk (id_kategori, nama, satuan, harga_beli, harga_jual, stok, stok_minimum, status_aktif, dibuat_pada, diperbarui_pada)
+                VALUES (:id_kategori, :name, :unit, :buy_price, :sell_price, :stock, 5, 1, NOW(), NOW())
             ");
             $stmt->execute([
                 'id_kategori' => $categoryId,
