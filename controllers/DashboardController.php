@@ -119,6 +119,13 @@ class DashboardController
         $lowStockStmt->execute();
         $lowStockCount = (int) $lowStockStmt->fetchColumn();
 
+        // Auto-check notifications (stok menipis & rekap harian)
+        cek_notif_stok_menipis();
+        cek_notif_rekap_harian();
+
+        // Unread notification count for bell badge
+        $unreadNotifCount = hitung_notif_belum_dibaca((int) $user['id']);
+
         // Recent 5 transactions
         $recentStmt = db()->prepare("
             SELECT 
@@ -174,13 +181,14 @@ class DashboardController
         }
 
         view('dashboard.index', [
-            'user' => $user,
-            'greeting' => $greeting,
-            'period' => $period,
-            'summary' => $summary,
-            'lowStockCount' => $lowStockCount,
+            'user'               => $user,
+            'greeting'           => $greeting,
+            'period'             => $period,
+            'summary'            => $summary,
+            'lowStockCount'      => $lowStockCount,
             'recentTransactions' => $recentTransactions,
-            'title' => 'Beranda - Warungku',
+            'unreadNotifCount'   => $unreadNotifCount,
+            'title'              => 'Beranda - Warungku',
         ]);
     }
 }
