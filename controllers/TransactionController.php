@@ -594,16 +594,26 @@ class TransactionController
             json_response(['success' => false, 'message' => 'Harga dan stok tidak boleh negatif.'], 422);
         }
 
+        // Handle image upload if provided
+        $imageName = null;
+        try {
+            $imageFile = $_FILES['gambar'] ?? $_FILES['image'] ?? null;
+            $imageName = upload_product_image($imageFile);
+        } catch (Exception $e) {
+            json_response(['success' => false, 'message' => $e->getMessage()], 422);
+        }
+
         $pdo = db();
         try {
             $stmt = $pdo->prepare("
-                INSERT INTO produk (id_kategori, nama, satuan, harga_beli, harga_jual, stok, stok_minimum, status_aktif, dibuat_pada, diperbarui_pada)
-                VALUES (:id_kategori, :name, :unit, :buy_price, :sell_price, :stock, 5, 1, NOW(), NOW())
+                INSERT INTO produk (id_kategori, nama, satuan, gambar, harga_beli, harga_jual, stok, stok_minimum, status_aktif, dibuat_pada, diperbarui_pada)
+                VALUES (:id_kategori, :name, :unit, :gambar, :buy_price, :sell_price, :stock, 5, 1, NOW(), NOW())
             ");
             $stmt->execute([
                 'id_kategori' => $categoryId,
                 'name' => $name,
                 'unit' => $unit,
+                'gambar' => $imageName,
                 'buy_price' => $buyPrice,
                 'sell_price' => $sellPrice,
                 'stock' => $stock,
@@ -626,6 +636,9 @@ class TransactionController
                     'harga_jual' => $sellPrice,
                     'stock' => $stock,
                     'stok' => $stock,
+                    'image' => $imageName,
+                    'gambar' => $imageName,
+                    'image_url' => $imageName ? url('/uploads/products/' . $imageName) : null,
                 ],
             ]);
         } catch (Exception $e) {

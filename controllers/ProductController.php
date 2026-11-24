@@ -290,70 +290,7 @@ class ProductController
 
     private function handleImageUpload(?array $file, ?string $oldImage = null): ?string
     {
-        if (!$file || empty($file['name']) || ($file['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
-            return $oldImage;
-        }
-
-        if ($file['error'] !== UPLOAD_ERR_OK) {
-            switch ($file['error']) {
-                case UPLOAD_ERR_INI_SIZE:
-                case UPLOAD_ERR_FORM_SIZE:
-                    throw new Exception('Ukuran foto terlalu besar melebihi batas upload server.');
-                case UPLOAD_ERR_PARTIAL:
-                    throw new Exception('Foto hanya terunggah sebagian. Silakan coba lagi.');
-                case UPLOAD_ERR_NO_TMP_DIR:
-                    throw new Exception('Folder penampung sementara server (tmp) tidak ditemukan.');
-                case UPLOAD_ERR_CANT_WRITE:
-                    throw new Exception('Gagal menulis file foto ke disk server.');
-                default:
-                    throw new Exception('Terjadi kesalahan saat mengunggah foto (Kode error: ' . $file['error'] . ').');
-            }
-        }
-
-        // Validate size (max 10MB)
-        if ($file['size'] > 10 * 1024 * 1024) {
-            $sizeMb = round($file['size'] / (1024 * 1024), 1);
-            throw new Exception("Ukuran foto ({$sizeMb}MB) terlalu besar. Maksimal 10MB.");
-        }
-
-        // Validate extension (support jpg, jpeg, jfif, png, webp, gif, avif)
-        $allowedExtensions = ['jpg', 'jpeg', 'jfif', 'png', 'webp', 'gif', 'avif'];
-        $originalExt = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-        if (!in_array($originalExt, $allowedExtensions)) {
-            throw new Exception("Format file (.{$originalExt}) tidak didukung. Gunakan format JPG, PNG, WEBP, atau AVIF.");
-        }
-
-        // Normalize jfif / jpeg to jpg
-        $ext = ($originalExt === 'jfif' || $originalExt === 'jpeg') ? 'jpg' : $originalExt;
-
-        // Validate image content using mime_content_type and getimagesize
-        $mime = @mime_content_type($file['tmp_name']);
-        $imageInfo = @getimagesize($file['tmp_name']);
-        if (!$imageInfo && (!$mime || !str_starts_with($mime, 'image/'))) {
-            throw new Exception('File yang diunggah bukan format gambar yang valid.');
-        }
-
-        $uploadDir = __DIR__ . '/../uploads/products/';
-        if (!is_dir($uploadDir)) {
-            mkdir($uploadDir, 0777, true);
-        }
-
-        $newFilename = 'prod_' . date('Ymd_His') . '_' . bin2hex(random_bytes(4)) . '.' . $ext;
-        $targetPath = $uploadDir . $newFilename;
-
-        if (!move_uploaded_file($file['tmp_name'], $targetPath) && !copy($file['tmp_name'], $targetPath)) {
-            throw new Exception('Gagal menyimpan file foto ke folder uploads/products.');
-        }
-
-        // Delete old image if exists
-        if ($oldImage && $oldImage !== $newFilename) {
-            $oldFilePath = $uploadDir . $oldImage;
-            if (is_file($oldFilePath)) {
-                @unlink($oldFilePath);
-            }
-        }
-
-        return $newFilename;
+        return upload_product_image($file, $oldImage);
     }
 }
 

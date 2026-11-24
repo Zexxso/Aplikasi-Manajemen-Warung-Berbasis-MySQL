@@ -10,6 +10,7 @@ $productsData = array_map(function ($p) {
     $buyPrice = (float) ($p['harga_beli'] ?? $p['buy_price'] ?? 0);
     $sellPrice = (float) ($p['harga_jual'] ?? $p['sell_price'] ?? 0);
     $stock = (int) ($p['stok'] ?? $p['stock'] ?? 0);
+    $image = $p['gambar'] ?? $p['image'] ?? null;
 
     return [
         'id' => (int) $p['id'],
@@ -18,11 +19,14 @@ $productsData = array_map(function ($p) {
         'harga_beli' => $buyPrice,
         'harga_jual' => $sellPrice,
         'stok' => $stock,
+        'gambar' => $image,
         'name' => (string) $name,
         'unit' => (string) $unit,
         'buy_price' => $buyPrice,
         'sell_price' => $sellPrice,
         'stock' => $stock,
+        'image' => $image,
+        'image_url' => $image ? url('/uploads/products/' . $image) : null,
     ];
 }, $globalProducts ?? []);
 
@@ -180,6 +184,8 @@ $suppliersData = array_map(function ($s) {
             buy_price: '',
             sell_price: '',
             stock: 0,
+            imageFile: null,
+            imagePreview: null,
             isSaving: false
         },
 
@@ -276,28 +282,33 @@ $suppliersData = array_map(function ($s) {
             try {
                 const csrfEl = document.querySelector('meta[name=csrf-token]');
                 const csrfToken = csrfEl ? csrfEl.content : '';
+
+                const formData = new FormData();
+                formData.append('_token', csrfToken);
+                formData.append('name', this.quickProduct.name.trim());
+                formData.append('nama', this.quickProduct.name.trim());
+                formData.append('unit', this.quickProduct.unit || 'pcs');
+                formData.append('satuan', this.quickProduct.unit || 'pcs');
+                formData.append('category_id', this.quickProduct.category_id || '');
+                formData.append('id_kategori', this.quickProduct.category_id || '');
+                formData.append('buy_price', this.quickProduct.buy_price);
+                formData.append('harga_beli', this.quickProduct.buy_price);
+                formData.append('sell_price', this.quickProduct.sell_price);
+                formData.append('harga_jual', this.quickProduct.sell_price);
+                formData.append('stock', this.quickProduct.stock || 0);
+                formData.append('stok', this.quickProduct.stock || 0);
+                if (this.quickProduct.imageFile) {
+                    formData.append('gambar', this.quickProduct.imageFile);
+                    formData.append('image', this.quickProduct.imageFile);
+                }
+
                 const response = await fetch('<?= url('/products/quick-store') ?>', {
                     method: 'POST',
                     headers: {
-                        'Content-Type': 'application/json',
                         'Accept': 'application/json',
                         'X-CSRF-TOKEN': csrfToken
                     },
-                    body: JSON.stringify({
-                        _token: csrfToken,
-                        name: this.quickProduct.name,
-                        nama: this.quickProduct.name,
-                        unit: this.quickProduct.unit || 'pcs',
-                        satuan: this.quickProduct.unit || 'pcs',
-                        category_id: this.quickProduct.category_id || '',
-                        id_kategori: this.quickProduct.category_id || '',
-                        buy_price: this.quickProduct.buy_price,
-                        harga_beli: this.quickProduct.buy_price,
-                        sell_price: this.quickProduct.sell_price,
-                        harga_jual: this.quickProduct.sell_price,
-                        stock: this.quickProduct.stock || 0,
-                        stok: this.quickProduct.stock || 0
-                    })
+                    body: formData
                 });
                 const res = await response.json();
                 if (res.success && res.product) {
@@ -312,11 +323,13 @@ $suppliersData = array_map(function ($s) {
                     this.quickProduct.buy_price = '';
                     this.quickProduct.sell_price = '';
                     this.quickProduct.category_id = '';
+                    this.quickProduct.imageFile = null;
+                    this.quickProduct.imagePreview = null;
                 } else if (res.message) {
                     alert(res.message);
                 }
             } catch (err) {
-                alert('Gagal menambahkan barang baru.');
+                alert('Gagal menambahkan barang baru: ' + (err.message || 'Error koneksi'));
             } finally {
                 this.quickProduct.isSaving = false;
             }
@@ -1222,16 +1235,28 @@ $suppliersData = array_map(function ($s) {
                 <template x-for="p in filteredPickerProducts" :key="p.id">
                     <div
                         @click="pickerMode === 'stockIn' ? selectProductForStockIn(p) : selectProductForStockOut(p)"
-                        class="p-3 bg-[#0B0E17] hover:bg-[#1E2538] border border-[#232B3E] rounded-xl cursor-pointer flex items-center justify-between transition group"
+                        class="p-2.5 bg-[#0B0E17] hover:bg-[#1E2538] border border-[#232B3E] rounded-xl cursor-pointer flex items-center justify-between transition group"
                     >
-                        <div>
-                            <h4 class="text-sm font-bold text-white group-hover:text-indigo-400 transition" x-text="p.name"></h4>
-                            <p class="text-xs text-slate-400 mt-0.5">
-                                Stok: <span class="font-semibold text-white" x-text="p.stock"></span> <span x-text="p.unit"></span>
-                                · Beli: Rp <span x-text="Number(p.buy_price).toLocaleString('id-ID')"></span>
-                            </p>
+                        <div class="flex items-center space-x-2.5 min-w-0">
+                            <div class="w-10 h-10 rounded-xl bg-[#161B29] border border-[#232B3E] flex items-center justify-center overflow-hidden flex-shrink-0 shadow-inner">
+                                <template x-if="p.image_url">
+                                    <img :src="p.image_url" class="w-full h-full object-cover">
+                                </template>
+                                <template x-if="!p.image_url">
+                                    <svg class="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4" />
+                                    </svg>
+                                </template>
+                            </div>
+                            <div class="min-w-0">
+                                <h4 class="text-sm font-bold text-white group-hover:text-indigo-400 transition truncate" x-text="p.name"></h4>
+                                <p class="text-xs text-slate-400 mt-0.5 truncate">
+                                    Stok: <span class="font-semibold text-white" x-text="p.stock"></span> <span x-text="p.unit"></span>
+                                    · Beli: Rp <span x-text="Number(p.buy_price).toLocaleString('id-ID')"></span>
+                                </p>
+                            </div>
                         </div>
-                        <div class="text-right">
+                        <div class="text-right flex-shrink-0 pl-2">
                             <span class="text-xs font-bold text-emerald-400 tabular-nums">
                                 Rp <span x-text="Number(p.sell_price).toLocaleString('id-ID')"></span>
                             </span>
@@ -1337,6 +1362,56 @@ $suppliersData = array_map(function ($s) {
                             placeholder="0"
                             class="w-full px-3 py-2.5 bg-[#0B0E17] border border-[#232B3E] rounded-xl text-white text-xs tabular-nums focus:outline-none focus:ring-2 focus:ring-[#4B4EF0]"
                         >
+                    </div>
+                </div>
+
+                <!-- Foto Barang (Opsional) -->
+                <div>
+                    <label class="block text-xs font-semibold text-slate-300 mb-1.5">Foto Barang (Opsional)</label>
+                    <div class="flex items-center space-x-3">
+                        <div class="relative w-12 h-12 rounded-xl bg-[#0B0E17] border border-[#232B3E] flex items-center justify-center overflow-hidden flex-shrink-0 shadow-inner">
+                            <template x-if="quickProduct.imagePreview">
+                                <img :src="quickProduct.imagePreview" class="w-full h-full object-cover">
+                            </template>
+                            <template x-if="!quickProduct.imagePreview">
+                                <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                </svg>
+                            </template>
+                        </div>
+                        <div class="flex-1 flex items-center space-x-2">
+                            <label class="px-3 py-2 bg-[#0B0E17] hover:bg-[#1E2538] border border-[#232B3E] rounded-xl text-xs font-semibold text-slate-200 cursor-pointer transition inline-flex items-center space-x-1.5">
+                                <svg class="w-3.5 h-3.5 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                                </svg>
+                                <span x-text="quickProduct.imagePreview ? 'Ganti Foto' : 'Pilih Foto'"></span>
+                                <input
+                                    type="file"
+                                    accept="image/*, .jpg, .jpeg, .jfif, .png, .webp, .gif, .avif"
+                                    class="hidden"
+                                    @change="
+                                        const file = $event.target.files[0];
+                                        if (file) {
+                                            if (file.size > 10 * 1024 * 1024) {
+                                                alert('Ukuran foto terlalu besar. Maksimal 10MB.');
+                                                $event.target.value = '';
+                                                return;
+                                            }
+                                            quickProduct.imageFile = file;
+                                            quickProduct.imagePreview = URL.createObjectURL(file);
+                                        }
+                                    "
+                                >
+                            </label>
+                            <button
+                                type="button"
+                                x-show="quickProduct.imagePreview"
+                                @click="quickProduct.imageFile = null; quickProduct.imagePreview = null"
+                                class="px-2 py-1.5 text-xs text-rose-400 hover:text-rose-300 font-semibold"
+                            >
+                                Hapus
+                            </button>
+                        </div>
                     </div>
                 </div>
 
